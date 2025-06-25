@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select
 from datetime import datetime, timezone
 import httpx
-from loguru import logger
+# from loguru import logger  # ← DISABLED FOR VERCEL
 
 from app.core.database import get_db
 from app.core.config import settings
@@ -25,8 +25,8 @@ async def google_login(
     if not settings.google_client_id or not settings.google_redirect_uri:
         raise auth_http_error(AuthErrorCode.OAUTH_CONFIG_MISSING)
 
-    # Use the frontend callback URL if provided, otherwise default
-    frontend_callback = state or redirect_uri or "http://localhost:3001/auth/callback"
+    # Use frontend URL from environment variable
+    frontend_callback = f"{settings.frontend_url}/auth/callback"
     
     auth_url = (
         f"{settings.google_auth_url}?"
@@ -47,8 +47,8 @@ async def google_callback(
 ):
     """Handle Google OAuth callback and redirect back to frontend"""
     
-    # Determine frontend callback URL
-    frontend_callback_url = state or "http://localhost:3001/auth/callback"
+    # Use frontend URL from environment variable
+    frontend_callback_url = f"{settings.frontend_url}/auth/callback"
     
     if not code:
         # Redirect with error
@@ -92,7 +92,7 @@ async def google_callback(
             # Find or create user
             user = db.query(User).filter(User.email == email).first()
             if not user:
-                logger.info(f"User not found, creating a new user: {email}")
+                print(f"User not found, creating a new user: {email}")  # Use print instead of logger
                 user = User(
                     email=email,
                     name=name,
@@ -117,11 +117,11 @@ async def google_callback(
             refresh_token = authorize.create_refresh_token(subject=email)
             
             # ✅ CRITICAL: Redirect back to frontend with token
-            logger.info(f"OAuth successful, redirecting to: {frontend_callback_url}")
+            print(f"OAuth successful, redirecting to: {frontend_callback_url}")
             return RedirectResponse(f"{frontend_callback_url}?token={jwt_access_token}")
             
     except Exception as e:
-        logger.error(f"OAuth error: {str(e)}")
+        print(f"OAuth error: {str(e)}")  # Use print instead of logger
         # Redirect with error
         return RedirectResponse(f"{frontend_callback_url}?error=Authentication failed: {str(e)}")
 

@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     IIFL_DISABLE_SSL: bool = False
     IIFL_SOURCE: str = "WEBAPI"
 
+    frontend_url: str = Field(default="http://localhost:3000", env="FRONTEND_URL")
     class Config:
         env_file = ".env"
 
