@@ -8,12 +8,12 @@ import sys # Import sys for printing directly to stderr if needed
 from app.core.config import settings
 from app.core.database import engine, Base # Ensure Base is imported
 from app.api.routes import auth, users, trading, market_data, websocket, iifl, portfolio
-from app.core.logging import setup_logging
+# from app.core.logging import setup_logging  # ← DISABLED FOR VERCEL
 from app.core.websocket_manager import manager
 from app.services.realtime_service import realtime_service
 
 # Setup logging
-setup_logging()
+# setup_logging()  # ← DISABLED FOR VERCEL
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
