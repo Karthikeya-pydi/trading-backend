@@ -91,8 +91,32 @@ async def get_market_data(
             publishFormat="JSON"
         )
         
-        return quotes_result
+        # Log the raw response for debugging
+        logger.info(f"Raw IIFL response: {quotes_result}")
+        
+        # Normalize the response to handle both listQuotes and quotesList
+        if quotes_result.get("type") == "success":
+            result = quotes_result.get("result", {})
             
+            # Check if data is in quotesList (new format) or listQuotes (old format)
+            quotes_data = result.get("quotesList", result.get("listQuotes", []))
+            
+            # Normalize the response
+            normalized_result = {
+                "type": "success",
+                "code": quotes_result.get("code", "s-quotes-0001"),
+                "description": quotes_result.get("description", "Get quotes successfully!"),
+                "result": {
+                    "mdp": result.get("mdp", 1512),
+                    "listQuotes": quotes_data,  # Always use listQuotes for consistency
+                    "quotesList": quotes_data   # Keep quotesList for backward compatibility
+                }
+            }
+            
+            return normalized_result
+        
+        return quotes_result
+  
     except HTTPException:
         raise
     except Exception as e:
@@ -160,7 +184,7 @@ async def search_instruments(
     Search for instruments by name, symbol, or ISIN
     
     Query parameters:
-    - q: Search query (required)
+    - q: Search query (required, min 1 character)
     - limit: Maximum results to return (default: 20, max: 100)
     - exchange_segment: Exchange segment filter (default: NSECM)
     """
@@ -170,10 +194,10 @@ async def search_instruments(
             detail="IIFL Market Data credentials not configured"
         )
     
-    if not q or len(q.strip()) < 2:
+    if not q or len(q.strip()) < 1:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Search query must be at least 2 characters"
+            detail="Search query must be at least 1 character"
         )
     
     # Enforce limit bounds
