@@ -8,6 +8,7 @@ from app.core.database import get_db
 from app.api.dependencies import get_current_user
 from app.models.user import User
 from app.services.iifl_service_fixed import IIFLServiceFixed
+from app.services.iifl_connect import IIFLConnect
 
 router = APIRouter()
 
@@ -16,16 +17,24 @@ async def market_data_info():
     """Market Data API Information"""
     return {
         "message": "Market Data API",
-        "version": "1.0.0",
+        "version": "2.0.0",
         "endpoints": {
             "POST /market-data": "Get real-time market data for instruments",
+            "POST /stock-data": "Get full market data for stock by name (POST)",
+            "GET /stock/{stock_name}": "Get full market data for stock by name (GET)",
             "POST /ltp": "Get Last Traded Price for instruments", 
             "GET /instruments/search": "Search instruments by name or symbol",
             "GET /instruments/master": "Download instrument master data",
             "WS /ws/market-data": "WebSocket for real-time market data streams"
         },
-        "authentication": "Bearer JWT token required",
-        "rate_limits": "As per IIFL API limits"
+        "features": {
+            "real_time_data": "Live market data from IIFL Binary Market Data API",
+            "stock_search": "Search stocks by name, symbol, or ISIN",
+            "comprehensive_data": "Touchline, Market Depth, OHLC data",
+            "historical_data": "5-day historical OHLC data",
+            "authentication": "Bearer JWT token required",
+            "rate_limits": "As per IIFL API limits"
+        }
     }
 
 @router.post("/market-data")
@@ -124,6 +133,292 @@ async def get_market_data(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to fetch market data"
+        )
+
+@router.post("/stock-data")
+async def get_stock_data_by_name(
+    request: Dict,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get full market data for a stock by name/symbol
+    
+    Request body:
+    {
+        "stock_name": "RELIANCE" or "RELIANCE-EQ" or "RELIANCE"
+    }
+    
+    Returns:
+    - Stock information
+    - Real-time market data (LTP, Bid/Ask, Volume, etc.)
+    - OHLC data
+    - Market depth (if available)
+    """
+    if not current_user.iifl_market_api_key:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="IIFL Market Data credentials not configured"
+        )
+    
+    stock_name = request.get("stock_name", "").strip()
+    if not stock_name:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Stock name is required"
+        )
+    
+    try:
+        # Initialize IIFL Connect for market data
+        iifl_client = IIFLConnect(current_user, api_type="market")
+        
+        # Step 1: Login to get token
+        login_response = iifl_client.marketdata_login()
+        if login_response.get("type") != "success":
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Failed to authenticate with IIFL Market Data API"
+            )
+        
+        # Step 2: Search for the stock
+        search_response = iifl_client.search_by_scriptname(stock_name)
+        
+        if search_response.get("type") != "success" or not search_response.get("result"):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Stock '{stock_name}' not found"
+            )
+        
+        # Filter for equity stocks (prefer NSECM - Cash Market, series EQ)
+        stocks = search_response["result"]
+        equity_stocks = [s for s in stocks if s.get("ExchangeSegment") == 1 and s.get("Series") == "EQ"]
+        
+        if equity_stocks:
+            stock_info = equity_stocks[0]  # Prefer equity stocks
+        else:
+            stock_info = stocks[0]  # Fallback to first result
+        
+        exchange_segment = stock_info.get("ExchangeSegment", 1)
+        exchange_instrument_id = stock_info.get("ExchangeInstrumentID")
+        
+        if not exchange_instrument_id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Invalid stock data for '{stock_name}'"
+            )
+        
+        # Step 3: Get real-time market data
+        instruments = [{
+            "exchangeSegment": exchange_segment,
+            "exchangeInstrumentID": exchange_instrument_id
+        }]
+        
+        # Get Touchline data (basic market data)
+        touchline_response = iifl_client.get_quote(
+            Instruments=instruments,
+            xtsMessageCode=iifl_client.MESSAGE_CODE_TOUCHLINE,
+            publishFormat=iifl_client.PUBLISH_FORMAT_JSON
+        )
+        
+        # Get Market Depth data (order book)
+        market_depth_response = iifl_client.get_quote(
+            Instruments=instruments,
+            xtsMessageCode=iifl_client.MESSAGE_CODE_MARKET_DEPTH,
+            publishFormat=iifl_client.PUBLISH_FORMAT_JSON
+        )
+        
+        # Step 4: Get OHLC data (last 5 days)
+        from datetime import datetime, timedelta
+        end_time = datetime.now()
+        start_time = end_time - timedelta(days=5)
+        
+        ohlc_response = iifl_client.get_ohlc(
+            exchangeSegment="NSECM" if exchange_segment == 1 else "NSEFO",
+            exchangeInstrumentID=exchange_instrument_id,
+            startTime=start_time.strftime("%b %d %Y %H%M%S"),
+            endTime=end_time.strftime("%b %d %Y %H%M%S"),
+            compressionValue=iifl_client.COMPRESSION_DAILY
+        )
+        
+        # Step 5: Compile comprehensive response
+        response_data = {
+            "type": "success",
+            "stock_info": {
+                "name": stock_info.get("DisplayName", stock_info.get("Name")),
+                "symbol": stock_info.get("Name"),
+                "exchange_segment": stock_info.get("ExchangeSegment"),
+                "instrument_id": stock_info.get("ExchangeInstrumentID"),
+                "series": stock_info.get("Series"),
+                "isin": stock_info.get("ISIN"),
+                "lot_size": stock_info.get("LotSize"),
+                "tick_size": stock_info.get("TickSize"),
+                "price_band_high": stock_info.get("PriceBand", {}).get("High"),
+                "price_band_low": stock_info.get("PriceBand", {}).get("Low")
+            },
+            "market_data": {
+                "touchline": touchline_response.get("result", {}),
+                "market_depth": market_depth_response.get("result", {})
+            },
+            "historical_data": {
+                "ohlc": ohlc_response.get("result", {})
+            },
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        # Step 6: Logout
+        iifl_client.marketdata_logout()
+        
+        return response_data
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to fetch stock data for '{stock_name}': {traceback.format_exc()}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch stock data for '{stock_name}'"
+        )
+
+@router.get("/stock/{stock_name}")
+async def get_stock_data_by_name_get(
+    stock_name: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get full market data for a stock by name/symbol (GET endpoint)
+    
+    Path parameter:
+    - stock_name: Stock name or symbol (e.g., "RELIANCE", "TCS", "INFY")
+    
+    Returns:
+    - Stock information
+    - Real-time market data (LTP, Bid/Ask, Volume, etc.)
+    - OHLC data
+    - Market depth (if available)
+    """
+    if not current_user.iifl_market_api_key:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="IIFL Market Data credentials not configured"
+        )
+    
+    stock_name = stock_name.strip().upper()
+    if not stock_name:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Stock name is required"
+        )
+    
+    try:
+        # Initialize IIFL Connect for market data
+        iifl_client = IIFLConnect(current_user, api_type="market")
+        
+        # Step 1: Login to get token
+        login_response = iifl_client.marketdata_login()
+        if login_response.get("type") != "success":
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Failed to authenticate with IIFL Market Data API"
+            )
+        
+        # Step 2: Search for the stock
+        search_response = iifl_client.search_by_scriptname(stock_name)
+        
+        if search_response.get("type") != "success" or not search_response.get("result"):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Stock '{stock_name}' not found"
+            )
+        
+        # Filter for equity stocks (prefer NSECM - Cash Market, series EQ)
+        stocks = search_response["result"]
+        equity_stocks = [s for s in stocks if s.get("ExchangeSegment") == 1 and s.get("Series") == "EQ"]
+        
+        if equity_stocks:
+            stock_info = equity_stocks[0]  # Prefer equity stocks
+        else:
+            stock_info = stocks[0]  # Fallback to first result
+        
+        exchange_segment = stock_info.get("ExchangeSegment", 1)
+        exchange_instrument_id = stock_info.get("ExchangeInstrumentID")
+        
+        if not exchange_instrument_id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Invalid stock data for '{stock_name}'"
+            )
+        
+        # Step 3: Get real-time market data
+        instruments = [{
+            "exchangeSegment": exchange_segment,
+            "exchangeInstrumentID": exchange_instrument_id
+        }]
+        
+        # Get Touchline data (basic market data)
+        touchline_response = iifl_client.get_quote(
+            Instruments=instruments,
+            xtsMessageCode=iifl_client.MESSAGE_CODE_TOUCHLINE,
+            publishFormat=iifl_client.PUBLISH_FORMAT_JSON
+        )
+        
+        # Get Market Depth data (order book)
+        market_depth_response = iifl_client.get_quote(
+            Instruments=instruments,
+            xtsMessageCode=iifl_client.MESSAGE_CODE_MARKET_DEPTH,
+            publishFormat=iifl_client.PUBLISH_FORMAT_JSON
+        )
+        
+        # Step 4: Get OHLC data (last 5 days)
+        from datetime import datetime, timedelta
+        end_time = datetime.now()
+        start_time = end_time - timedelta(days=5)
+        
+        ohlc_response = iifl_client.get_ohlc(
+            exchangeSegment="NSECM" if exchange_segment == 1 else "NSEFO",
+            exchangeInstrumentID=exchange_instrument_id,
+            startTime=start_time.strftime("%b %d %Y %H%M%S"),
+            endTime=end_time.strftime("%b %d %Y %H%M%S"),
+            compressionValue=iifl_client.COMPRESSION_DAILY
+        )
+        
+        # Step 5: Compile comprehensive response
+        response_data = {
+            "type": "success",
+            "stock_info": {
+                "name": stock_info.get("DisplayName", stock_info.get("Name")),
+                "symbol": stock_info.get("Name"),
+                "exchange_segment": stock_info.get("ExchangeSegment"),
+                "instrument_id": stock_info.get("ExchangeInstrumentID"),
+                "series": stock_info.get("Series"),
+                "isin": stock_info.get("ISIN"),
+                "lot_size": stock_info.get("LotSize"),
+                "tick_size": stock_info.get("TickSize"),
+                "price_band_high": stock_info.get("PriceBand", {}).get("High"),
+                "price_band_low": stock_info.get("PriceBand", {}).get("Low")
+            },
+            "market_data": {
+                "touchline": touchline_response.get("result", {}),
+                "market_depth": market_depth_response.get("result", {})
+            },
+            "historical_data": {
+                "ohlc": ohlc_response.get("result", {})
+            },
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        # Step 6: Logout
+        iifl_client.marketdata_logout()
+        
+        return response_data
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to fetch stock data for '{stock_name}': {traceback.format_exc()}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch stock data for '{stock_name}'"
         )
 
 @router.post("/ltp")
