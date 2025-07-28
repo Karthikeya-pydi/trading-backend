@@ -252,6 +252,59 @@ class IIFLService:
         except Exception as e:
             logger.error(f"Positions fetch failed for user {user_id}: {e}")
             raise
+
+    def get_balance(self, db: Session, user_id: int) -> Dict:
+        """Get account balance from IIFL Interactive API"""
+        try:
+            # Use IIFLConnect class for proper API handling
+            user = db.query(User).filter(User.id == user_id).first()
+            if not user:
+                raise ValueError("User not found")
+            
+            client = IIFLConnect(user, api_type="interactive")
+            
+            # Login to get session
+            login_response = client.interactive_login()
+            if login_response.get("type") != "success":
+                raise Exception(f"IIFL login failed: {login_response.get('description', 'Unknown error')}")
+            
+            # Get balance using the proper IIFLConnect method
+            balance_result = client.get_balance()
+            
+            # Add debugging for balance values
+            logger.info(f"Raw balance result: {balance_result}")
+            if balance_result.get("type") == "success" and "result" in balance_result:
+                balance_list = balance_result["result"].get("BalanceList", [])
+                logger.info(f"Balance List: {balance_list}")
+                
+                for balance_item in balance_list:
+                    limit_object = balance_item.get("limitObject", {})
+                    rms_sub_limits = limit_object.get("RMSSubLimits", {})
+                    margin_available = limit_object.get("marginAvailable", {})
+                    
+                    logger.info(f"RMS Sub Limits: {rms_sub_limits}")
+                    logger.info(f"Margin Available: {margin_available}")
+                    
+                    # Check specific balance fields
+                    cash_available = rms_sub_limits.get("cashAvailable")
+                    net_margin_available = rms_sub_limits.get("netMarginAvailable")
+                    cash_margin_available = margin_available.get("CashMarginAvailable")
+                    
+                    logger.info(f"Cash Available: {cash_available} (type: {type(cash_available)})")
+                    logger.info(f"Net Margin Available: {net_margin_available} (type: {type(net_margin_available)})")
+                    logger.info(f"Cash Margin Available: {cash_margin_available} (type: {type(cash_margin_available)})")
+            
+            # Logout to clean up session
+            try:
+                client.interactive_logout()
+            except:
+                pass  # Ignore logout errors
+            
+            return balance_result
+            
+        except Exception as e:
+            logger.error(f"Balance fetch failed for user {user_id}: {e}")
+            raise
     
     def get_market_data(self, db: Session, user_id: int, instruments: List[str]) -> Dict:
         """Get market data for instruments using Market Data API"""
@@ -305,7 +358,7 @@ class IIFLService:
             # Convert instruments list to proper format
             instrument_request = {
                 "instruments": instruments,
-                "xtsMessageCode": 1502,  # LTP message code
+                "xtsMessageCode":1512,  # LTP message code
                 "publishFormat": "JSON"
             }
             

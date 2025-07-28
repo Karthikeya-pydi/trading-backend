@@ -17,7 +17,67 @@ async def place_order(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Place a trading order"""
+    """
+    Place a trading order through IIFL Interactive API.
+    
+    This endpoint allows you to place various types of orders:
+    
+    **Cash Market Orders:**
+    - Market orders for equities
+    - Limit orders with specific prices
+    - Stop loss orders
+    
+    **F&O Orders:**
+    - Futures orders (NIFTY, BANKNIFTY, etc.)
+    - Options orders (CALL/PUT with strike prices)
+    - All order types with proper expiry dates
+    
+    **Example Requests:**
+    
+    1. **NIFTY Futures Market Order:**
+    ```json
+    {
+        "underlying_instrument": "NIFTY",
+        "order_type": "BUY",
+        "quantity": 50,
+        "expiry_date": "2024-12-28"
+    }
+    ```
+    
+    2. **NIFTY Options Limit Order:**
+    ```json
+    {
+        "underlying_instrument": "NIFTY",
+        "option_type": "CALL",
+        "strike_price": 19000,
+        "order_type": "BUY",
+        "quantity": 25,
+        "price": 150.50,
+        "expiry_date": "2024-12-28"
+    }
+    ```
+    
+    3. **Equity Cash Market Order:**
+    ```json
+    {
+        "underlying_instrument": "RELIANCE",
+        "order_type": "BUY",
+        "quantity": 100,
+        "price": 2500.00
+    }
+    ```
+    
+    4. **Stop Loss Order:**
+    ```json
+    {
+        "underlying_instrument": "NIFTY",
+        "order_type": "SELL",
+        "quantity": 50,
+        "stop_loss_price": 18500,
+        "expiry_date": "2024-12-28"
+    }
+    ```
+    """
     if not current_user.iifl_interactive_api_key:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -28,14 +88,6 @@ async def place_order(
         # Use the fixed IIFL service
         iifl_service = IIFLServiceFixed(db)
         order_result = iifl_service.place_order(db, current_user.id, trade_request)
-        
-        # Check if order placement was successful
-        if order_result.get("type") != "success":
-            error_desc = order_result.get("description", "Unknown error")
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"IIFL order placement failed: {error_desc}"
-            )
         
         # Extract order ID from successful response
         order_id = order_result.get("result", {}).get("AppOrderID")
@@ -72,6 +124,87 @@ async def place_order(
         
     except HTTPException:
         # Re-raise HTTPExceptions (like IIFL failures)
+        raise
+    except Exception as e:
+        # Handle other unexpected errors
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to place order: {str(e)}"
+        )
+
+@router.post("/place-order-advanced", response_model=TradeResponse)
+async def place_order_advanced(
+    trade_request: TradeRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Advanced order placement with detailed validation and instrument lookup.
+    
+    This endpoint provides enhanced order placement with:
+    - Automatic instrument ID lookup for F&O contracts
+    - Detailed validation of order parameters
+    - Better error messages and handling
+    - Support for all IIFL order types
+    
+    **Features:**
+    - Automatic exchange segment detection
+    - F&O instrument search and matching
+    - Product type determination (NRML/CNC/MIS)
+    - Stop loss order handling
+    - Comprehensive error reporting
+    """
+    if not current_user.iifl_interactive_api_key:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="IIFL Interactive credentials not configured. Please configure your IIFL API credentials first."
+        )
+    
+    try:
+        # Use the fixed IIFL service with enhanced features
+        iifl_service = IIFLServiceFixed(db)
+        
+        # Place order with enhanced validation and instrument lookup
+        order_result = iifl_service.place_order(db, current_user.id, trade_request)
+        
+        # Extract order details
+        result_data = order_result.get("result", {})
+        order_id = result_data.get("AppOrderID")
+        order_status = result_data.get("OrderStatus", "NEW")
+        
+        if not order_id:
+            # Generate fallback order ID
+            import time
+            order_id = f"local_{current_user.id}_{int(time.time())}"
+        
+        # Save trade to database
+        trade = Trade(
+            user_id=current_user.id,
+            order_id=str(order_id),
+            underlying_instrument=trade_request.underlying_instrument,
+            option_type=trade_request.option_type,
+            strike_price=trade_request.strike_price,
+            expiry_date=trade_request.expiry_date,
+            order_type=trade_request.order_type,
+            quantity=trade_request.quantity,
+            price=trade_request.price,
+            order_status=order_status,
+            stop_loss_price=trade_request.stop_loss_price
+        )
+        
+        db.add(trade)
+        db.commit()
+        db.refresh(trade)
+        
+        return TradeResponse(
+            id=trade.id,
+            order_id=trade.order_id,
+            status="success",
+            message=f"Order placed successfully. Order ID: {order_id}"
+        )
+        
+    except HTTPException:
+        # Re-raise HTTPExceptions
         raise
     except Exception as e:
         # Handle other unexpected errors

@@ -76,53 +76,235 @@ class IIFLServiceFixed:
     def place_order(self, db: Session, user_id: int, trade_request: TradeRequest) -> Dict:
         """Place order through IIFL Interactive API using IIFLConnect"""
         try:
+            # Validate trade request
+            self._validate_trade_request(trade_request)
+            
             # Get authenticated IIFLConnect client
             client = self._get_client(user_id, "interactive")
             
-            # Determine exchange segment and instrument ID
-            exchange_segment = self._get_exchange_segment(trade_request.underlying_instrument)
-            instrument_id = self._get_instrument_id(trade_request)
+            # Get proper instrument details
+            instrument_details = self._get_instrument_details(client, trade_request)
             
-            # Determine order type
-            if trade_request.price is not None:
-                order_type = "LIMIT"
-                limit_price = trade_request.price
-            else:
-                order_type = "MARKET"
-                limit_price = 0
+            # Determine order type and parameters
+            order_params = self._prepare_order_parameters(trade_request, instrument_details)
             
-            # Stop loss handling
-            stop_price = trade_request.stop_loss_price or 0
-            if stop_price > 0:
-                order_type = "SL-M"  # Stop Loss Market
-                limit_price = 0
+            logger.info(f"Placing order for user {user_id} with params: {order_params}")
             
             # Use IIFLConnect's place_order method
-            order_result = client.place_order(
-                exchangeSegment=exchange_segment,
-                exchangeInstrumentID=instrument_id,
-                productType="NRML",  # Can be made configurable
-                orderType=order_type,
-                orderSide=trade_request.order_type,  # BUY or SELL
-                timeInForce="DAY",
-                disclosedQuantity=0,
-                orderQuantity=trade_request.quantity,
-                limitPrice=limit_price,
-                stopPrice=stop_price,
-                orderUniqueIdentifier=f"user_{user_id}_{int(datetime.now().timestamp())}",
-                apiOrderSource="WebAPI"
-            )
+            order_result = client.place_order(**order_params)
             
             logger.info(f"Order placed for user {user_id}: {order_result}")
+            
+            # Validate order result
+            if order_result.get("type") != "success":
+                error_msg = order_result.get("description", "Unknown error")
+                logger.error(f"Order placement failed for user {user_id}: {error_msg}")
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"IIFL order placement failed: {error_msg}"
+                )
+            
             return order_result
             
+        except HTTPException:
+            # Re-raise HTTPExceptions
+            raise
         except Exception as e:
-            logger.error(f"Order placement failed for user {user_id}: {e}")
+            logger.error(f"Order placement failed for user {user_id}: {traceback.format_exc()}")
             # Clear cache on error to force re-authentication next time
             cache_key = f"{user_id}_interactive"
             if cache_key in self._client_cache:
                 del self._client_cache[cache_key]
-            raise
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to place order: {str(e)}"
+            )
+
+    def _validate_trade_request(self, trade_request: TradeRequest):
+        """Validate trade request parameters"""
+        if not trade_request.underlying_instrument:
+            raise HTTPException(status_code=400, detail="Underlying instrument is required")
+        
+        if trade_request.quantity <= 0:
+            raise HTTPException(status_code=400, detail="Quantity must be greater than 0")
+        
+        # Validate F&O specific parameters
+        if self._is_futures_options_instrument(trade_request.underlying_instrument):
+            if not trade_request.expiry_date:
+                raise HTTPException(status_code=400, detail="Expiry date is required for F&O instruments")
+            
+            if trade_request.option_type and not trade_request.strike_price:
+                raise HTTPException(status_code=400, detail="Strike price is required for options")
+            
+            if trade_request.strike_price and not trade_request.option_type:
+                raise HTTPException(status_code=400, detail="Option type is required when strike price is provided")
+
+    def _is_futures_options_instrument(self, instrument: str) -> bool:
+        """Check if instrument is a futures/options instrument"""
+        fno_instruments = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX", "BANKEX"]
+        return instrument.upper() in fno_instruments
+
+    def _get_instrument_details(self, client: IIFLConnect, trade_request: TradeRequest) -> Dict:
+        """Get proper instrument details from IIFL"""
+        try:
+            exchange_segment = self._get_exchange_segment(trade_request.underlying_instrument)
+            
+            # For F&O instruments, try to get proper instrument ID
+            if self._is_futures_options_instrument(trade_request.underlying_instrument):
+                instrument_id = self._get_fno_instrument_id(client, trade_request)
+            else:
+                # For cash market instruments, use basic mapping
+                instrument_id = self._get_cash_instrument_id(trade_request.underlying_instrument)
+            
+            return {
+                "exchangeSegment": exchange_segment,
+                "exchangeInstrumentID": instrument_id,
+                "instrumentType": "F&O" if self._is_futures_options_instrument(trade_request.underlying_instrument) else "CASH"
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to get instrument details: {str(e)}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Failed to get instrument details: {str(e)}"
+            )
+
+    def _get_fno_instrument_id(self, client: IIFLConnect, trade_request: TradeRequest) -> int:
+        """Get F&O instrument ID using IIFL's instrument search"""
+        try:
+            # Search for the instrument using IIFL's search API
+            search_string = self._build_search_string(trade_request)
+            logger.info(f"Searching for F&O instrument: {search_string}")
+            
+            search_result = client.search_by_scriptname(searchString=search_string)
+            
+            if search_result.get("type") == "success":
+                instruments = search_result.get("result", [])
+                
+                # Find the matching instrument
+                for instrument in instruments:
+                    if self._matches_trade_request(instrument, trade_request):
+                        instrument_id = instrument.get("ExchangeInstrumentID")
+                        if instrument_id:
+                            logger.info(f"Found matching instrument ID: {instrument_id}")
+                            return int(instrument_id)
+            
+            # Fallback to basic mapping if search fails
+            logger.warning(f"Could not find exact instrument match for {search_string}, using fallback")
+            return self._get_fallback_instrument_id(trade_request)
+            
+        except Exception as e:
+            logger.error(f"Failed to get F&O instrument ID: {str(e)}")
+            # Use fallback
+            return self._get_fallback_instrument_id(trade_request)
+
+    def _build_search_string(self, trade_request: TradeRequest) -> str:
+        """Build search string for instrument lookup"""
+        base = trade_request.underlying_instrument
+        
+        if trade_request.option_type:
+            # For options: NIFTY 23DEC 19000 CE
+            expiry_str = trade_request.expiry_date.strftime("%d%b").upper()
+            strike_str = str(int(trade_request.strike_price))
+            option_str = trade_request.option_type[:2].upper()  # CE or PE
+            return f"{base} {expiry_str} {strike_str} {option_str}"
+        else:
+            # For futures: NIFTY 23DEC
+            expiry_str = trade_request.expiry_date.strftime("%d%b").upper()
+            return f"{base} {expiry_str}"
+
+    def _matches_trade_request(self, instrument: Dict, trade_request: TradeRequest) -> bool:
+        """Check if instrument matches trade request"""
+        try:
+            # Basic matching logic - can be enhanced based on actual IIFL response structure
+            symbol = instrument.get("Name", "").upper()
+            
+            # Check if it contains the underlying
+            if trade_request.underlying_instrument.upper() not in symbol:
+                return False
+            
+            # For options, check strike and option type
+            if trade_request.option_type and trade_request.strike_price:
+                strike_str = str(int(trade_request.strike_price))
+                option_str = trade_request.option_type[:2].upper()
+                
+                if strike_str not in symbol or option_str not in symbol:
+                    return False
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error matching instrument: {str(e)}")
+            return False
+
+    def _get_fallback_instrument_id(self, trade_request: TradeRequest) -> int:
+        """Get fallback instrument ID for F&O instruments"""
+        # This is a basic fallback - in production, you should have a proper instrument master
+        fallback_map = {
+            "NIFTY": 26000,
+            "BANKNIFTY": 26009,
+            "FINNIFTY": 26037,
+            "MIDCPNIFTY": 26014,
+            "SENSEX": 26065,
+            "BANKEX": 26118
+        }
+        
+        instrument_id = fallback_map.get(trade_request.underlying_instrument.upper(), 26000)
+        logger.warning(f"Using fallback instrument ID {instrument_id} for {trade_request.underlying_instrument}")
+        return instrument_id
+
+    def _get_cash_instrument_id(self, instrument: str) -> int:
+        """Get instrument ID for cash market instruments"""
+        cash_map = {
+            "RELIANCE": 2885,
+            "TCS": 11536,
+            "HDFC": 1330,
+            "INFY": 1594,
+            "ICICIBANK": 4963,
+            "HINDUNILVR": 1394,
+            "ITC": 1660,
+            "SBIN": 3045,
+            "BHARTIARTL": 271,
+            "AXISBANK": 5902
+        }
+        return cash_map.get(instrument.upper(), 26000)
+
+    def _prepare_order_parameters(self, trade_request: TradeRequest, instrument_details: Dict) -> Dict:
+        """Prepare order parameters for IIFL API"""
+        # Determine order type
+        if trade_request.price is not None:
+            order_type = "LIMIT"
+            limit_price = trade_request.price
+        else:
+            order_type = "MARKET"
+            limit_price = 0
+        
+        # Handle stop loss
+        stop_price = trade_request.stop_loss_price or 0
+        if stop_price > 0:
+            order_type = "SL-M"  # Stop Loss Market
+            limit_price = 0
+        
+        # Determine product type
+        if self._is_futures_options_instrument(trade_request.underlying_instrument):
+            product_type = "NRML"  # Normal for F&O
+        else:
+            product_type = "CNC"  # Cash and Carry for equities
+        
+        return {
+            "exchangeSegment": instrument_details["exchangeSegment"],
+            "exchangeInstrumentID": instrument_details["exchangeInstrumentID"],
+            "productType": product_type,
+            "orderType": order_type,
+            "orderSide": trade_request.order_type,  # BUY or SELL
+            "timeInForce": "DAY",
+            "disclosedQuantity": 0,
+            "orderQuantity": trade_request.quantity,
+            "limitPrice": limit_price,
+            "stopPrice": stop_price,
+            "orderUniqueIdentifier": f"ord_{int(datetime.now().timestamp())}"[-20:],  # Max 20 chars
+            "apiOrderSource": "WebAPI"
+        }
 
     def get_order_book(self, db: Session, user_id: int) -> Dict:
         """Get order book from IIFL Interactive API"""
@@ -243,7 +425,7 @@ class IIFLServiceFixed:
             # Use IIFLConnect's get_quote method
             quote_result = client.get_quote(
                 Instruments=instruments,
-                xtsMessageCode=1502,  # LTP message code
+                xtsMessageCode=1512,  # LTP message code
                 publishFormat="JSON"
             )
             

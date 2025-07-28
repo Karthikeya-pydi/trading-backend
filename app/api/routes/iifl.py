@@ -98,4 +98,32 @@ async def validate_credentials(
         interactive_secret_key=request.interactive_secret_key
     )
     
-    return validation 
+    return validation
+
+@router.get("/balance")
+async def get_account_balance(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get account balance from IIFL"""
+    if not current_user.iifl_interactive_api_key:
+        raise HTTPException(
+            status_code=400,
+            detail="IIFL Interactive credentials not configured"
+        )
+    
+    try:
+        iifl_service = IIFLService(db)
+        balance_result = iifl_service.get_balance(db, current_user.id)
+        
+        return {
+            "status": "success",
+            "balance": balance_result,
+            "message": f"Retrieved balance for user {current_user.email}"
+        }
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch balance: {str(e)}"
+        ) 
