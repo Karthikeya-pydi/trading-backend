@@ -9,6 +9,7 @@ from app.api.dependencies import get_current_user
 from app.models.user import User
 from app.services.iifl_service_fixed import IIFLServiceFixed
 from app.services.iifl_connect import IIFLConnect
+from app.services.market_analytics_service import MarketAnalyticsService
 
 router = APIRouter()
 
@@ -32,6 +33,7 @@ async def market_data_info():
             "stock_search": "Search stocks by name, symbol, or ISIN",
             "comprehensive_data": "Touchline, Market Depth, OHLC data",
             "historical_data": "5-day historical OHLC data",
+            "market_analytics": "Market Cap, Returns (1D/1W/1M/6M/1Y), CAGR (5Y), Gap with Nifty",
             "authentication": "Bearer JWT token required",
             "rate_limits": "As per IIFL API limits"
         }
@@ -154,6 +156,7 @@ async def get_stock_data_by_name(
     - Real-time market data (LTP, Bid/Ask, Volume, etc.)
     - OHLC data
     - Market depth (if available)
+    - Analytics data (Market Cap, Returns, CAGR, Gap with Nifty)
     """
     if not current_user.iifl_market_api_key:
         raise HTTPException(
@@ -240,7 +243,61 @@ async def get_stock_data_by_name(
             compressionValue=iifl_client.COMPRESSION_DAILY
         )
         
-        # Step 5: Compile comprehensive response
+        # Step 5: Get current price from touchline data
+        current_price = None
+        try:
+            if touchline_response.get("result", {}).get("listQuotes"):
+                quotes_data = touchline_response["result"]["listQuotes"]
+                if isinstance(quotes_data, list) and len(quotes_data) > 0:
+                    first_quote = quotes_data[0]
+                    if isinstance(first_quote, dict):
+                        current_price = first_quote.get("Touchline", {}).get("LastTradedPrice")
+                    elif isinstance(first_quote, str):
+                        # Handle JSON string response - parse it
+                        try:
+                            import json
+                            parsed_quote = json.loads(first_quote)
+                            current_price = parsed_quote.get("LastTradedPrice")
+                            logger.info(f"Successfully parsed JSON string quote for price: {current_price}")
+                        except json.JSONDecodeError as json_err:
+                            logger.warning(f"Failed to parse JSON string quote: {json_err}")
+                        except Exception as parse_err:
+                            logger.warning(f"Error parsing quote string: {parse_err}")
+            elif touchline_response.get("result", {}).get("quotesList"):
+                quotes_data = touchline_response["result"]["quotesList"]
+                if isinstance(quotes_data, list) and len(quotes_data) > 0:
+                    first_quote = quotes_data[0]
+                    if isinstance(first_quote, dict):
+                        current_price = first_quote.get("Touchline", {}).get("LastTradedPrice")
+                    elif isinstance(first_quote, str):
+                        # Handle JSON string response - parse it
+                        try:
+                            import json
+                            parsed_quote = json.loads(first_quote)
+                            current_price = parsed_quote.get("LastTradedPrice")
+                            logger.info(f"Successfully parsed JSON string quote for price: {current_price}")
+                        except json.JSONDecodeError as json_err:
+                            logger.warning(f"Failed to parse JSON string quote: {json_err}")
+                        except Exception as parse_err:
+                            logger.warning(f"Error parsing quote string: {parse_err}")
+        except Exception as e:
+            logger.error(f"Error extracting current price from touchline response: {e}")
+            current_price = None
+        
+        # Step 6: Calculate analytics if current price is available
+        analytics_data = None
+        if current_price:
+            try:
+                analytics_service = MarketAnalyticsService(current_user, db)
+                analytics_data = analytics_service.get_stock_analytics(
+                    symbol=stock_info.get("Name"),
+                    current_price=float(current_price)
+                )
+            except Exception as e:
+                logger.error(f"Error calculating analytics for {stock_name}: {e}")
+                analytics_data = {"error": "Failed to calculate analytics"}
+        
+        # Step 7: Compile comprehensive response
         response_data = {
             "type": "success",
             "stock_info": {
@@ -262,10 +319,11 @@ async def get_stock_data_by_name(
             "historical_data": {
                 "ohlc": ohlc_response.get("result", {})
             },
+            "analytics": analytics_data,
             "timestamp": datetime.now().isoformat()
         }
         
-        # Step 6: Logout
+        # Step 8: Logout
         iifl_client.marketdata_logout()
         
         return response_data
@@ -296,6 +354,7 @@ async def get_stock_data_by_name_get(
     - Real-time market data (LTP, Bid/Ask, Volume, etc.)
     - OHLC data
     - Market depth (if available)
+    - Analytics data (Market Cap, Returns, CAGR, Gap with Nifty)
     """
     if not current_user.iifl_market_api_key:
         raise HTTPException(
@@ -382,7 +441,61 @@ async def get_stock_data_by_name_get(
             compressionValue=iifl_client.COMPRESSION_DAILY
         )
         
-        # Step 5: Compile comprehensive response
+        # Step 5: Get current price from touchline data
+        current_price = None
+        try:
+            if touchline_response.get("result", {}).get("listQuotes"):
+                quotes_data = touchline_response["result"]["listQuotes"]
+                if isinstance(quotes_data, list) and len(quotes_data) > 0:
+                    first_quote = quotes_data[0]
+                    if isinstance(first_quote, dict):
+                        current_price = first_quote.get("Touchline", {}).get("LastTradedPrice")
+                    elif isinstance(first_quote, str):
+                        # Handle JSON string response - parse it
+                        try:
+                            import json
+                            parsed_quote = json.loads(first_quote)
+                            current_price = parsed_quote.get("LastTradedPrice")
+                            logger.info(f"Successfully parsed JSON string quote for price: {current_price}")
+                        except json.JSONDecodeError as json_err:
+                            logger.warning(f"Failed to parse JSON string quote: {json_err}")
+                        except Exception as parse_err:
+                            logger.warning(f"Error parsing quote string: {parse_err}")
+            elif touchline_response.get("result", {}).get("quotesList"):
+                quotes_data = touchline_response["result"]["quotesList"]
+                if isinstance(quotes_data, list) and len(quotes_data) > 0:
+                    first_quote = quotes_data[0]
+                    if isinstance(first_quote, dict):
+                        current_price = first_quote.get("Touchline", {}).get("LastTradedPrice")
+                    elif isinstance(first_quote, str):
+                        # Handle JSON string response - parse it
+                        try:
+                            import json
+                            parsed_quote = json.loads(first_quote)
+                            current_price = parsed_quote.get("LastTradedPrice")
+                            logger.info(f"Successfully parsed JSON string quote for price: {current_price}")
+                        except json.JSONDecodeError as json_err:
+                            logger.warning(f"Failed to parse JSON string quote: {json_err}")
+                        except Exception as parse_err:
+                            logger.warning(f"Error parsing quote string: {parse_err}")
+        except Exception as e:
+            logger.error(f"Error extracting current price from touchline response: {e}")
+            current_price = None
+        
+        # Step 6: Calculate analytics if current price is available
+        analytics_data = None
+        if current_price:
+            try:
+                analytics_service = MarketAnalyticsService(current_user, db)
+                analytics_data = analytics_service.get_stock_analytics(
+                    symbol=stock_info.get("Name"),
+                    current_price=float(current_price)
+                )
+            except Exception as e:
+                logger.error(f"Error calculating analytics for {stock_name}: {e}")
+                analytics_data = {"error": "Failed to calculate analytics"}
+        
+        # Step 7: Compile comprehensive response
         response_data = {
             "type": "success",
             "stock_info": {
@@ -404,10 +517,11 @@ async def get_stock_data_by_name_get(
             "historical_data": {
                 "ohlc": ohlc_response.get("result", {})
             },
+            "analytics": analytics_data,
             "timestamp": datetime.now().isoformat()
         }
         
-        # Step 6: Logout
+        # Step 8: Logout
         iifl_client.marketdata_logout()
         
         return response_data
@@ -482,6 +596,10 @@ async def search_instruments(
     - q: Search query (required, min 1 character)
     - limit: Maximum results to return (default: 20, max: 100)
     - exchange_segment: Exchange segment filter (default: NSECM)
+    
+    Returns:
+    - List of matching instruments with analytics data
+    - Analytics include: Market Cap, Returns (1D/1W/1M/6M/1Y), CAGR (5Y), Gap with Nifty
     """
     if not current_user.iifl_market_api_key:
         raise HTTPException(
@@ -510,12 +628,90 @@ async def search_instruments(
             len(search_result.get("result", [])) > 0):
             # Return IIFL search results
             results = search_result.get("result", [])[:limit]
+            
+            # Get analytics for the results
+            analytics_service = MarketAnalyticsService(current_user, db)
+            enhanced_results = []
+            
+            for instrument in results:
+                try:
+                    # Get current price for the instrument
+                    instruments_for_quote = [{
+                        "exchangeSegment": instrument.get("ExchangeSegment", 1),
+                        "exchangeInstrumentID": instrument.get("ExchangeInstrumentID")
+                    }]
+                    
+                    quote_response = client.get_quote(
+                        Instruments=instruments_for_quote,
+                        xtsMessageCode=client.MESSAGE_CODE_TOUCHLINE,
+                        publishFormat=client.PUBLISH_FORMAT_JSON
+                    )
+                    
+                    current_price = None
+                    try:
+                        if quote_response.get("result", {}).get("listQuotes"):
+                            quotes_data = quote_response["result"]["listQuotes"]
+                            if isinstance(quotes_data, list) and len(quotes_data) > 0:
+                                first_quote = quotes_data[0]
+                                if isinstance(first_quote, dict):
+                                    current_price = first_quote.get("Touchline", {}).get("LastTradedPrice")
+                                elif isinstance(first_quote, str):
+                                    # Handle JSON string response - parse it
+                                    try:
+                                        import json
+                                        parsed_quote = json.loads(first_quote)
+                                        current_price = parsed_quote.get("LastTradedPrice")
+                                        logger.info(f"Successfully parsed JSON string quote for price: {current_price}")
+                                    except json.JSONDecodeError as json_err:
+                                        logger.warning(f"Failed to parse JSON string quote: {json_err}")
+                                    except Exception as parse_err:
+                                        logger.warning(f"Error parsing quote string: {parse_err}")
+                        elif quote_response.get("result", {}).get("quotesList"):
+                            quotes_data = quote_response["result"]["quotesList"]
+                            if isinstance(quotes_data, list) and len(quotes_data) > 0:
+                                first_quote = quotes_data[0]
+                                if isinstance(first_quote, dict):
+                                    current_price = first_quote.get("Touchline", {}).get("LastTradedPrice")
+                                elif isinstance(first_quote, str):
+                                    # Handle JSON string response - parse it
+                                    try:
+                                        import json
+                                        parsed_quote = json.loads(first_quote)
+                                        current_price = parsed_quote.get("LastTradedPrice")
+                                        logger.info(f"Successfully parsed JSON string quote for price: {current_price}")
+                                    except json.JSONDecodeError as json_err:
+                                        logger.warning(f"Failed to parse JSON string quote: {json_err}")
+                                    except Exception as parse_err:
+                                        logger.warning(f"Error parsing quote string: {parse_err}")
+                    except Exception as e:
+                        logger.error(f"Error extracting current price from quote response: {e}")
+                        current_price = None
+                    
+                    # Calculate analytics if price is available
+                    analytics_data = None
+                    if current_price:
+                        analytics_data = analytics_service.get_stock_analytics(
+                            symbol=instrument.get("Name"),
+                            current_price=float(current_price)
+                        )
+                    
+                    # Add analytics to instrument data
+                    enhanced_instrument = instrument.copy()
+                    enhanced_instrument["analytics"] = analytics_data
+                    enhanced_results.append(enhanced_instrument)
+                    
+                except Exception as e:
+                    logger.error(f"Error getting analytics for {instrument.get('Name')}: {e}")
+                    enhanced_instrument = instrument.copy()
+                    enhanced_instrument["analytics"] = {"error": "Failed to calculate analytics"}
+                    enhanced_results.append(enhanced_instrument)
+            
             return {
                 "type": "success",
                 "query": q,
                 "total_found": len(search_result.get("result", [])),
-                "returned": len(results),
-                "results": results,
+                "returned": len(enhanced_results),
+                "results": enhanced_results,
                 "source": "iifl_search"
             }
         
@@ -577,12 +773,73 @@ async def search_instruments(
             except Exception:
                 continue
         
+        # Get analytics for the master data results
+        analytics_service = MarketAnalyticsService(current_user, db)
+        enhanced_results = []
+        
+        for instrument in matching_instruments:
+            try:
+                # Get current price for the instrument
+                instruments_for_quote = [{
+                    "exchangeSegment": instrument.get("ExchangeSegment", 1),
+                    "exchangeInstrumentID": instrument.get("ExchangeInstrumentID")
+                }]
+                
+                quote_response = client.get_quote(
+                    Instruments=instruments_for_quote,
+                    xtsMessageCode=client.MESSAGE_CODE_TOUCHLINE,
+                    publishFormat=client.PUBLISH_FORMAT_JSON
+                )
+                
+                current_price = None
+                try:
+                    if quote_response.get("result", {}).get("listQuotes"):
+                        quotes_data = quote_response["result"]["listQuotes"]
+                        if isinstance(quotes_data, list) and len(quotes_data) > 0:
+                            first_quote = quotes_data[0]
+                            if isinstance(first_quote, dict):
+                                current_price = first_quote.get("Touchline", {}).get("LastTradedPrice")
+                            elif isinstance(first_quote, str):
+                                # Handle string response - try to extract price from string
+                                logger.warning(f"Received string response for quotes: {first_quote}")
+                    elif quote_response.get("result", {}).get("quotesList"):
+                        quotes_data = quote_response["result"]["quotesList"]
+                        if isinstance(quotes_data, list) and len(quotes_data) > 0:
+                            first_quote = quotes_data[0]
+                            if isinstance(first_quote, dict):
+                                current_price = first_quote.get("Touchline", {}).get("LastTradedPrice")
+                            elif isinstance(first_quote, str):
+                                # Handle string response - try to extract price from string
+                                logger.warning(f"Received string response for quotes: {first_quote}")
+                except Exception as e:
+                    logger.error(f"Error extracting current price from quote response: {e}")
+                    current_price = None
+                
+                # Calculate analytics if price is available
+                analytics_data = None
+                if current_price:
+                    analytics_data = analytics_service.get_stock_analytics(
+                        symbol=instrument.get("Name"),
+                        current_price=float(current_price)
+                    )
+                
+                # Add analytics to instrument data
+                enhanced_instrument = instrument.copy()
+                enhanced_instrument["analytics"] = analytics_data
+                enhanced_results.append(enhanced_instrument)
+                
+            except Exception as e:
+                logger.error(f"Error getting analytics for {instrument.get('Name')}: {e}")
+                enhanced_instrument = instrument.copy()
+                enhanced_instrument["analytics"] = {"error": "Failed to calculate analytics"}
+                enhanced_results.append(enhanced_instrument)
+        
         return {
             "type": "success",
             "query": q,
             "total_found": len(matching_instruments),
-            "returned": len(matching_instruments),
-            "results": matching_instruments,
+            "returned": len(enhanced_results),
+            "results": enhanced_results,
             "source": "master_data"
         }
         
