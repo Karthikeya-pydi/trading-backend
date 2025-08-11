@@ -3,6 +3,9 @@ from sqlalchemy.orm import Session
 from typing import List, Dict, Optional
 import traceback
 from loguru import logger
+import pandas as pd
+import os
+from pathlib import Path
 
 from app.core.database import get_db
 from app.api.dependencies import get_current_user
@@ -26,6 +29,7 @@ async def market_data_info():
             "POST /ltp": "Get Last Traded Price for instruments", 
             "GET /instruments/search": "Search instruments by name or symbol",
             "GET /instruments/master": "Download instrument master data",
+            "GET /bhavcopy": "Get all bhavcopy data from CSV file",
             "WS /ws/market-data": "WebSocket for real-time market data streams"
         },
         "features": {
@@ -34,6 +38,7 @@ async def market_data_info():
             "comprehensive_data": "Touchline, Market Depth, OHLC data",
             "historical_data": "5-day historical OHLC data",
             "market_analytics": "Market Cap, Returns (1D/1W/1M/6M/1Y), CAGR (5Y), Gap with Nifty",
+            "bhavcopy_data": "Historical bhavcopy data from uploaded CSV files",
             "authentication": "Bearer JWT token required",
             "rate_limits": "As per IIFL API limits"
         }
@@ -988,4 +993,45 @@ async def get_instrument_master(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to fetch instrument master data"
+        )
+
+@router.get("/bhavcopy")
+async def get_bhavcopy_data(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get all bhavcopy data from the uploaded CSV file
+    Simple endpoint that returns all data without filtering or pagination
+    """
+    try:
+        # Path to the bhavcopy CSV file
+        csv_path = Path("uploads/sec_bhavdata_full_08082025.csv")
+        
+        if not csv_path.exists():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Bhavcopy data file not found"
+            )
+        
+        # Read CSV file
+        df = pd.read_csv(csv_path)
+        
+        # Clean column names by stripping whitespace
+        df.columns = df.columns.str.strip()
+        
+        # Convert DataFrame to list of dictionaries
+        records = df.to_dict('records')
+        
+        return {
+            "message": "Bhavcopy data retrieved successfully",
+            "total_records": len(records),
+            "data": records
+        }
+        
+    except Exception as e:
+        logger.error(f"Error reading bhavcopy data: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error reading bhavcopy data: {str(e)}"
         )
