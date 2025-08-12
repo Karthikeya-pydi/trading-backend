@@ -10,6 +10,13 @@ from app.models.user import User
 from app.services.portfolio_service import PortfolioService
 from app.services.iifl_service_fixed import IIFLServiceFixed
 from app.services.holdings_market_data import HoldingsMarketDataService
+from app.services.bhavcopy_service import BhavcopyService
+from app.schemas.bhavcopy import (
+    BhavcopyStockResponse, 
+    BhavcopySymbolsResponse, 
+    BhavcopySummaryResponse,
+    BhavcopyErrorResponse
+)
 
 router = APIRouter()
 
@@ -258,3 +265,94 @@ async def get_holdings_with_current_prices(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to fetch holdings with current prices: {str(e)}"
         ) 
+
+# Bhavcopy Data Endpoints
+@router.get("/bhavcopy/stock/{symbol}", response_model=BhavcopyStockResponse)
+async def get_stock_bhavcopy_data(
+    symbol: str,
+    date: Optional[str] = Query(None, description="Date filter (format: DD-MMM-YYYY)"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get BSE bhavcopy data for a specific stock symbol
+    This endpoint can be used to show detailed market data for each holding
+    """
+    try:
+        bhavcopy_service = BhavcopyService()
+        result = bhavcopy_service.get_stock_bhavcopy_data(symbol, date)
+        
+        if result.get("status") == "success":
+            return result
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=result.get("message", "Stock data not found")
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch bhavcopy data: {str(e)}"
+        )
+
+@router.get("/bhavcopy/symbols", response_model=BhavcopySymbolsResponse)
+async def get_available_symbols(
+    limit: int = Query(100, description="Maximum number of symbols to return"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get list of available symbols from bhavcopy data
+    Useful for autocomplete/search functionality
+    """
+    try:
+        bhavcopy_service = BhavcopyService()
+        result = bhavcopy_service.get_available_symbols(limit)
+        
+        if result.get("status") == "success":
+            return result
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=result.get("message", "Failed to fetch symbols")
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch available symbols: {str(e)}"
+        )
+
+@router.get("/bhavcopy/summary", response_model=BhavcopySummaryResponse)
+async def get_bhavcopy_summary(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get summary of available bhavcopy data files
+    Useful for monitoring data availability
+    """
+    try:
+        bhavcopy_service = BhavcopyService()
+        result = bhavcopy_service.get_bhavcopy_summary()
+        
+        if result.get("status") == "success":
+            return result
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=result.get("message", "Failed to fetch bhavcopy summary")
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch bhavcopy summary: {str(e)}"
+        )
