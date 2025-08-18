@@ -165,5 +165,5 @@ dump.rdb
 # pytest
 .pytest_cache/ 
 
-merge_bhavcopy_with_returns.py
-process_full_details_returns.py
+adjusted-eq-data-2025-08-15.csv
+

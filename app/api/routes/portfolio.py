@@ -11,6 +11,7 @@ from app.services.portfolio_service import PortfolioService
 from app.services.iifl_service_fixed import IIFLServiceFixed
 from app.services.holdings_market_data import HoldingsMarketDataService
 from app.services.bhavcopy_service import BhavcopyService
+from app.services.stock_returns_service import StockReturnsService
 from app.schemas.bhavcopy import (
     BhavcopyStockResponse, 
     BhavcopySymbolsResponse, 
@@ -355,4 +356,103 @@ async def get_bhavcopy_summary(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to fetch bhavcopy summary: {str(e)}"
+        )
+
+# Stock Returns Data Endpoints
+@router.get("/returns/stock/{symbol}")
+async def get_stock_returns_data(
+    symbol: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get stock returns data for a specific stock symbol
+    Returns performance data across different time periods
+    """
+    try:
+        returns_service = StockReturnsService()
+        result = returns_service.get_stock_returns(symbol)
+        
+        if result.get("status") == "success":
+            return result
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=result.get("message", "Stock returns data not found")
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch stock returns: {str(e)}"
+        )
+
+@router.get("/returns/summary")
+async def get_returns_summary(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get summary statistics of stock returns data
+    Includes mean, median, min, max, and top/bottom performers
+    """
+    try:
+        returns_service = StockReturnsService()
+        result = returns_service.get_returns_summary()
+        
+        if result.get("status") == "success":
+            return result
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=result.get("message", "Failed to fetch returns summary")
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch returns summary: {str(e)}"
+        )
+
+@router.get("/returns/top-performers")
+async def get_top_performers(
+    period: str = Query("1_Year", description="Time period for performance (1_Week, 1_Month, 3_Months, 6_Months, 1_Year, 3_Years, 5_Years)"),
+    limit: int = Query(10, description="Number of top performers to return"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get top performing stocks for a specific time period
+    Useful for creating performance leaderboards
+    """
+    try:
+        returns_service = StockReturnsService()
+        
+        # Get all returns sorted by the specified period
+        result = returns_service.get_all_returns(limit, period, "desc")
+        
+        if result.get("status") == "success":
+            return {
+                "status": "success",
+                "period": period,
+                "top_performers": result["data"],
+                "count": len(result["data"]),
+                "timestamp": datetime.now().isoformat()
+            }
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=result.get("message", "Failed to fetch top performers")
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch top performers: {str(e)}"
         )
