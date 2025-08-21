@@ -921,6 +921,21 @@ class IIFLConnect(IIFLCommon):
             return response
         except Exception as e:
             return {"type": "error", "description": str(e)}
+    
+    def search_by_instrument_id(self, instrument_id):
+        """Search instruments by a single instrument ID"""
+        try:
+            # Create instruments list format expected by IIFL
+            instruments = [{
+                "exchangeSegment": "NSECM",  # Default to NSE Cash Market
+                "exchangeInstrumentID": instrument_id
+            }]
+            
+            params = {'source': self.source, 'instruments': instruments}
+            response = self._post('market.search.instrumentsbyid', params)
+            return response
+        except Exception as e:
+            return {"type": "error", "description": str(e)}
 
     def search_by_scriptname(self, searchString):
         try:

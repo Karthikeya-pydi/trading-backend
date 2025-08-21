@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional, Literal
+from typing import Optional, Literal, List, Dict, Any
 from datetime import datetime, date
 
 class TradeRequest(BaseModel):
@@ -43,3 +43,51 @@ class MarketDataResponse(BaseModel):
     change: float
     change_percent: float
     timestamp: datetime
+
+# New schemas for simplified stock trading
+class StockSearchResult(BaseModel):
+    symbol: str
+    name: str
+    exchange_segment: int
+    instrument_id: int
+    series: str
+    isin: str
+    lot_size: int
+    tick_size: float
+    current_price: Optional[float] = None
+    market_data: Dict[str, Any] = {}
+
+class StockSearchResponse(BaseModel):
+    type: str
+    query: str
+    total_found: int
+    returned: int
+    results: List[StockSearchResult]
+    message: str
+
+class BuyStockRequest(BaseModel):
+    stock_symbol: str
+    quantity: int
+    price: Optional[float] = None  # None for market orders
+    order_type: Literal["BUY", "SELL"] = "BUY"
+
+class BuyStockResponse(BaseModel):
+    status: str
+    message: str
+    order_id: str
+    trade_id: int
+    stock_info: Dict[str, Any]
+    order_details: Dict[str, Any]
+    timestamp: str
+
+class StockQuoteResponse(BaseModel):
+    type: str
+    stock_info: Dict[str, Any]
+    market_data: Dict[str, Any]
+    timestamp: str
+
+class EnhancedOrderBookResponse(BaseModel):
+    type: str
+    result: List[Dict[str, Any]]
+    enhanced: bool
+    message: str
