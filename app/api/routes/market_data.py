@@ -6,6 +6,7 @@ from loguru import logger
 import pandas as pd
 import os
 from pathlib import Path
+import json
 
 from app.core.database import get_db
 from app.api.dependencies import get_current_user
@@ -13,6 +14,10 @@ from app.models.user import User
 from app.services.iifl_service_fixed import IIFLServiceFixed
 from app.services.iifl_connect import IIFLConnect
 from app.services.market_analytics_service import MarketAnalyticsService
+from app.core.redis_client import get_redis
+
+# Redis key prefix for storing nifty data
+REDIS_KEY_PREFIX = "nifty:indices:"
 
 router = APIRouter()
 
@@ -30,6 +35,9 @@ async def market_data_info():
             "GET /instruments/search": "Search instruments by name or symbol",
             "GET /instruments/master": "Download instrument master data",
             "GET /bhavcopy": "Get all bhavcopy data from CSV file",
+            "GET /nifty/indices": "Get list of available Nifty indices for dropdown",
+            "GET /nifty/{index_name}": "Get specific Nifty index data and constituents",
+            "GET /nifty/{index_name}/constituents": "Get just the constituent stocks for an index",
             "WS /ws/market-data": "WebSocket for real-time market data streams"
         },
         "features": {
@@ -39,6 +47,7 @@ async def market_data_info():
             "historical_data": "5-day historical OHLC data",
             "market_analytics": "Market Cap, Returns (1D/1W/1M/6M/1Y), CAGR (5Y), Gap with Nifty",
             "bhavcopy_data": "Historical bhavcopy data from uploaded CSV files",
+            "nifty_indices": "Nifty index constituent data from Redis with dropdown support",
             "authentication": "Bearer JWT token required",
             "rate_limits": "As per IIFL API limits"
         }
@@ -1006,7 +1015,7 @@ async def get_bhavcopy_data(
     """
     try:
         # Path to the bhavcopy CSV file
-        csv_path = Path("uploads/bhavcopies/sec_bhavdata_full_18082025.csv")
+        csv_path = Path("uploads/bhavcopies/sec_bhavdata_full_20082025.csv")
         
         if not csv_path.exists():
             raise HTTPException(
@@ -1034,4 +1043,225 @@ async def get_bhavcopy_data(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error reading bhavcopy data: {str(e)}"
+        )
+
+@router.get("/nifty/indices")
+async def get_nifty_indices(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get list of available Nifty indices from Redis
+    Returns list of index names for frontend dropdown
+    """
+    try:
+        redis_client = get_redis()
+        
+        # Get all keys with the nifty prefix
+        pattern = f"{REDIS_KEY_PREFIX}*"
+        keys = redis_client.keys(pattern)
+        
+        if not keys:
+            return {
+                "message": "No Nifty indices found in Redis",
+                "indices": [],
+                "total_count": 0
+            }
+        
+        indices = []
+        for key in keys:
+            # Remove the prefix to show clean index names
+            index_name = key.replace(REDIS_KEY_PREFIX, '').replace('_', ' ')
+            
+            # Get data size from Redis
+            data = redis_client.get(key)
+            if data:
+                try:
+                    # Parse JSON to get row count
+                    json_data = json.loads(data)
+                    row_count = len(json_data) if isinstance(json_data, list) else 0
+                    
+                    indices.append({
+                        "redis_key": key,
+                        "index_name": index_name,
+                        "total_constituents": row_count,
+                        "data_size_bytes": len(data),
+                        "source": "Redis"
+                    })
+                except json.JSONDecodeError:
+                    logger.warning(f"Invalid JSON data in Redis key: {key}")
+                    continue
+        
+        # Sort by index name for better UX
+        indices.sort(key=lambda x: x["index_name"])
+        
+        return {
+            "message": "Nifty indices retrieved successfully from Redis",
+            "indices": indices,
+            "total_count": len(indices),
+            "source": "Redis"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error reading Nifty indices from Redis: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error reading Nifty indices from Redis: {str(e)}"
+        )
+
+@router.get("/nifty/{index_name}")
+async def get_nifty_index_data(
+    index_name: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get specific Nifty index data by index name from Redis
+    Returns the constituent stocks for the specified index
+    """
+    try:
+        redis_client = get_redis()
+        
+        # Create Redis key for the index
+        redis_key = f"{REDIS_KEY_PREFIX}{index_name.replace(' ', '_').replace('&', 'and')}"
+        
+        # Get data from Redis
+        data = redis_client.get(redis_key)
+        
+        if not data:
+            # Try to find a matching key (case-insensitive)
+            pattern = f"{REDIS_KEY_PREFIX}*"
+            keys = redis_client.keys(pattern)
+            found_key = None
+            
+            for key in keys:
+                # Remove prefix and compare index names
+                key_index_name = key.replace(REDIS_KEY_PREFIX, '').replace('_', ' ')
+                if key_index_name.lower() == index_name.lower():
+                    found_key = key
+                    break
+            
+            if found_key:
+                redis_key = found_key
+                data = redis_client.get(found_key)
+            else:
+                # Get available indices for better error message
+                available_keys = redis_client.keys(pattern)
+                available_indices = [key.replace(REDIS_KEY_PREFIX, '').replace('_', ' ') for key in available_keys]
+                
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Index '{index_name}' not found in Redis. Available indices: {available_indices}"
+                )
+        
+        # Parse JSON data
+        try:
+            json_data = json.loads(data)
+            records = json_data if isinstance(json_data, list) else []
+            
+            # Get column names from first record if available
+            columns = list(records[0].keys()) if records else []
+            
+            return {
+                "message": f"Nifty index '{index_name}' data retrieved successfully from Redis",
+                "index_name": index_name,
+                "redis_key": redis_key,
+                "total_constituents": len(records),
+                "data_size_bytes": len(data),
+                "source": "Redis",
+                "columns": columns,
+                "data": records
+            }
+            
+        except json.JSONDecodeError as e:
+            logger.error(f"Invalid JSON data in Redis key '{redis_key}': {str(e)}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Invalid data format in Redis for index '{index_name}'"
+            )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error reading Nifty index '{index_name}' from Redis: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error reading Nifty index data from Redis: {str(e)}"
+        )
+
+@router.get("/nifty/{index_name}/constituents")
+async def get_nifty_index_constituents(
+    index_name: str,
+    limit: Optional[int] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get just the constituent stocks list for a specific Nifty index from Redis
+    Optional limit parameter to restrict number of results
+    """
+    try:
+        redis_client = get_redis()
+        
+        # Create Redis key for the index
+        redis_key = f"{REDIS_KEY_PREFIX}{index_name.replace(' ', '_').replace('&', 'and')}"
+        
+        # Get data from Redis
+        data = redis_client.get(redis_key)
+        
+        if not data:
+            # Try to find a matching key (case-insensitive)
+            pattern = f"{REDIS_KEY_PREFIX}*"
+            keys = redis_client.keys(pattern)
+            found_key = None
+            
+            for key in keys:
+                # Remove prefix and compare index names
+                key_index_name = key.replace(REDIS_KEY_PREFIX, '').replace('_', ' ')
+                if key_index_name.lower() == index_name.lower():
+                    found_key = key
+                    break
+            
+            if found_key:
+                redis_key = found_key
+                data = redis_client.get(found_key)
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Index '{index_name}' not found in Redis"
+                )
+        
+        # Parse JSON data
+        try:
+            json_data = json.loads(data)
+            records = json_data if isinstance(json_data, list) else []
+            
+            # Apply limit if specified
+            if limit and limit > 0:
+                records = records[:limit]
+            
+            return {
+                "message": f"Nifty index '{index_name}' constituents retrieved successfully from Redis",
+                "index_name": index_name,
+                "redis_key": redis_key,
+                "total_constituents": len(records),
+                "limit_applied": limit if limit else None,
+                "source": "Redis",
+                "constituents": records
+            }
+            
+        except json.JSONDecodeError as e:
+            logger.error(f"Invalid JSON data in Redis key '{redis_key}': {str(e)}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Invalid data format in Redis for index '{index_name}'"
+            )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error reading Nifty index constituents '{index_name}' from Redis: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error reading Nifty index constituents from Redis: {str(e)}"
         )
