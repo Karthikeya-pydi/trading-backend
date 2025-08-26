@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     IIFL_DISABLE_SSL: bool = False
     IIFL_SOURCE: str = "WEBAPI"
 
+    backend_url: str = "http://trading-backend-oab.info:8000"
     frontend_url: str = "https://trading-frontend-3enh.vercel.app"
     class Config:
         env_file = ".env"
