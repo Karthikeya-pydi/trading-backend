@@ -4,7 +4,8 @@ services:
   app:
     build: .
     ports:
-      - "8000:8000"
+      - "80:8000"   # HTTP
+      - "443:8000"  # HTTPS
     environment:
       - DATABASE_URL=${DATABASE_URL}
       - REDIS_URL=${REDIS_URL}
@@ -15,6 +16,7 @@ services:
     volumes:
       - ./logs:/app/logs
       - ./uploads:/app/uploads
+      - /etc/letsencrypt:/etc/letsencrypt:ro  # SSL certificates
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/"]

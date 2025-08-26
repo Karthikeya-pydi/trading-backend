@@ -61,9 +61,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[ 
         "http://localhost:3000",
-        "http://localhost:5173",
-        "https://trading-frontend-3enh.vercel.app",
-        "https://trading-frontend-3enh.vercel.app/"],  # In production, replace with specific origins
+        "https://trading-frontend-3enh.vercel.app"],  # In production, replace with specific origins
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
