@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     # Google OAuth
     google_client_id: str = "your_google_client_id"
     google_client_secret: str = "your_google_client_secret"
-    google_redirect_uri: str = "http://localhost:8000/api/auth/oauth/google/callback"
+    google_redirect_uri: str = "http://trading-backend-oab.info:8000/api/auth/oauth/google/callback"
     google_auth_url: str = "https://accounts.google.com/o/oauth2/v2/auth"
     google_token_url: str = "https://oauth2.googleapis.com/token"
     google_userinfo_url: str = "https://www.googleapis.com/oauth2/v1/userinfo"
