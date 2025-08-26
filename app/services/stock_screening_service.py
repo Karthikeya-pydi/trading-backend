@@ -7,12 +7,19 @@ from datetime import datetime, timezone
 
 from bs4 import BeautifulSoup
 from bs4.element import NavigableString
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.support.ui import WebDriverWait
-from webdriver_manager.chrome import ChromeDriverManager
+
+# Make Selenium optional for production deployment
+try:
+    from selenium import webdriver
+    from selenium.webdriver.chrome.service import Service
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.support import expected_conditions as EC
+    from selenium.webdriver.support.ui import WebDriverWait
+    from webdriver_manager.chrome import ChromeDriverManager
+    SELENIUM_AVAILABLE = True
+except ImportError:
+    SELENIUM_AVAILABLE = False
+    print("Warning: Selenium not available. Stock screening features will be limited.")
 
 from app.models.stock_screening import StockScreening
 from app.core.database import SessionLocal
@@ -28,6 +35,10 @@ class StockScreeningService:
         
     def _setup_driver(self):
         """Setup Chrome driver with essential options"""
+        if not SELENIUM_AVAILABLE:
+            print("Selenium not available - cannot setup Chrome driver")
+            return None
+            
         try:
             options = webdriver.ChromeOptions()
             options.add_argument("--headless")
@@ -44,8 +55,11 @@ class StockScreeningService:
     
     def _expand_all_buttons(self, driver, parent_id: str, btn_clsname: str):
         """Expand all collapsible sections"""
-        wait = WebDriverWait(driver, 10)
+        if not SELENIUM_AVAILABLE or driver is None:
+            return
+            
         try:
+            wait = WebDriverWait(driver, 10)
             parent_section = wait.until(EC.presence_of_element_located((By.ID, parent_id)))
             buttons = parent_section.find_elements(By.CLASS_NAME, btn_clsname)
             
@@ -60,6 +74,9 @@ class StockScreeningService:
     
     def _extract_table_data(self, driver, section_id: str) -> Dict[str, Any]:
         """Extract table data and convert to structured format"""
+        if not SELENIUM_AVAILABLE or driver is None:
+            return {"error": "Selenium not available"}
+            
         try:
             parent_element = driver.find_element(By.ID, section_id)
             table_html = parent_element.find_element(By.TAG_NAME, 'table').get_attribute('outerHTML')
@@ -99,6 +116,9 @@ class StockScreeningService:
     
     def _extract_overview_data(self, driver, stock_symbol: str) -> Dict[str, Any]:
         """Extract company overview and key metrics"""
+        if not SELENIUM_AVAILABLE or driver is None:
+            return {"company_name": stock_symbol, "error": "Selenium not available"}
+            
         try:
             overview_data = {}
             
@@ -164,6 +184,10 @@ class StockScreeningService:
     
     def scrape_stock_data(self, stock_symbol: str, stock_name: Optional[str] = None) -> Dict[str, Any]:
         """Main method to scrape all available data for a stock"""
+        if not SELENIUM_AVAILABLE:
+            # Fallback: Try to get basic info using httpx if available
+            return self._fallback_scrape(stock_symbol, stock_name)
+            
         driver = None
         scraped_data = {}
         
@@ -211,6 +235,56 @@ class StockScreeningService:
         finally:
             if driver:
                 driver.quit()
+    
+    def _fallback_scrape(self, stock_symbol: str, stock_name: Optional[str] = None) -> Dict[str, Any]:
+        """Fallback method when Selenium is not available - uses basic HTTP requests"""
+        try:
+            import httpx
+            
+            company_url = f"{self.base_url}/{stock_symbol}/"
+            
+            with httpx.Client(timeout=30.0) as client:
+                response = client.get(company_url)
+                
+                if response.status_code == 404:
+                    return {"error": f"Stock {stock_symbol} not found on screener.in"}
+                
+                if response.status_code != 200:
+                    return {"error": f"Failed to fetch data: HTTP {response.status_code}"}
+                
+                # Parse with BeautifulSoup
+                soup = BeautifulSoup(response.text, "html.parser")
+                
+                # Extract basic company name
+                company_name = stock_symbol
+                title_tag = soup.find('title')
+                if title_tag:
+                    title_text = title_tag.get_text(strip=True)
+                    if " - " in title_text:
+                        company_name = title_text.split(" - ")[0].strip()
+                
+                # Basic overview data
+                overview_data = {
+                    "company_name": company_name,
+                    "source": "fallback_scraping",
+                    "note": "Limited data due to Selenium unavailability"
+                }
+                
+                return {
+                    "overview": overview_data,
+                    "note": "This is limited data from fallback scraping. Full features require Selenium."
+                }
+                
+        except ImportError:
+            return {
+                "error": "Selenium not available and httpx not available for fallback scraping.",
+                "overview": {"company_name": stock_symbol, "error": "No scraping capabilities available"}
+            }
+        except Exception as e:
+            return {
+                "error": f"Fallback scraping failed: {str(e)}",
+                "overview": {"company_name": stock_symbol, "error": str(e)}
+            }
     
     def save_to_database(self, stock_symbol: str, scraped_data: Dict[str, Any], 
                         stock_name: Optional[str] = None) -> StockScreening:

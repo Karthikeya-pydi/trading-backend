@@ -20,5 +20,5 @@ websockets==12.0
 requests==2.31.0
 python-socketio>=5.8.0
 beautifulsoup4==4.12.2
-selenium==4.15.2
-webdriver-manager==4.0.1
+# selenium==4.15.2  # Commented out for Vercel deployment - too large
+# webdriver-manager==4.0.1  # Commented out for Vercel deployment - too large
