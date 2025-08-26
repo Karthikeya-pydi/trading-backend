@@ -1,0 +1,57 @@
+# Virtual environment
+venv/
+env/
+.venv/
+
+# Large data files and uploads
+uploads/
+uploads/bhavcopies/
+uploads/bhavcopies/sec_bhavdata_full_08082025.csv
+uploads/bhavcopies/sec_bhavdata_full_11082025.csv
+uploads/bhavcopies/sec_bhavdata_full_12082025.csv
+uploads/bhavcopies/sec_bhavdata_full_18082025.csv
+uploads/bhavcopies/sec_bhavdata_full_19082025.csv
+uploads/bhavcopies/sec_bhavdata_full_20082025.csv
+uploads/bhavcopies/sec_bhavdata_full_21082025.csv
+uploads/sectors/
+uploads/sectors/fno_stocks_list_04DEC2024.csv
+*.csv
+adjusted-eq-data-2025-08-25.csv
+final_stocks_with_sectors.csv
+
+# Logs
+logs/
+*.log
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+trading_platform.db
+
+# Temporary files
+tmp/
+temp/
+.tmp/
+
+# Redis dump
+dump.rdb
+
+# Alembic versions (if not needed in production)
+alembic/versions/
+
+# Large Python files that might not be needed
+get_all_instruments.py
+nifty.py
+returnsCalculation.py
+screener_scraper.py
+
+# Interactive and market data files
+interactive.json
+market.json
