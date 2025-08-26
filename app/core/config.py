@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     IIFL_DISABLE_SSL: bool = False
     IIFL_SOURCE: str = "WEBAPI"
 
-    frontend_url: str = "http://localhost:3000"
+    frontend_url: str = "https://trading-frontend-3enh.vercel.app"
     class Config:
         env_file = ".env"
 
