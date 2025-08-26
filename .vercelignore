@@ -3,21 +3,6 @@ venv/
 env/
 .venv/
 
-# Large data files and uploads
-uploads/
-uploads/bhavcopies/
-uploads/bhavcopies/sec_bhavdata_full_08082025.csv
-uploads/bhavcopies/sec_bhavdata_full_11082025.csv
-uploads/bhavcopies/sec_bhavdata_full_12082025.csv
-uploads/bhavcopies/sec_bhavdata_full_18082025.csv
-uploads/bhavcopies/sec_bhavdata_full_19082025.csv
-uploads/bhavcopies/sec_bhavdata_full_20082025.csv
-uploads/bhavcopies/sec_bhavdata_full_21082025.csv
-uploads/sectors/
-uploads/sectors/fno_stocks_list_04DEC2024.csv
-adjusted-eq-data-2025-08-25.csv
-final_stocks_with_sectors.csv
-
 
 # Logs
 logs/
