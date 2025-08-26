@@ -13,6 +13,7 @@ from app.core.database import Base
 # Import all models to ensure they're registered
 from app.models.user import User
 from app.models.trade import Trade, Position
+from app.models.stock_screening import StockScreening
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.database_url)
