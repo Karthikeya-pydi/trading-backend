@@ -1015,7 +1015,7 @@ async def get_bhavcopy_data(
     """
     try:
         # Path to the bhavcopy CSV file
-        csv_path = Path("uploads/bhavcopies/sec_bhavdata_full_20082025.csv")
+        csv_path = Path("uploads/bhavcopies/sec_bhavdata_full_21082025.csv")
         
         if not csv_path.exists():
             raise HTTPException(

@@ -8,6 +8,10 @@ from sqlalchemy import or_, and_, func, text
 from app.models.instrument import Instrument
 from app.services.iifl_service_fixed import IIFLServiceFixed
 from app.core.database import get_db
+from typing import Dict, Optional
+from loguru import logger
+from app.services.iifl_connect import IIFLConnect
+from app.models.user import User
 
 logger = logging.getLogger(__name__)
 
@@ -281,3 +285,69 @@ class InstrumentService:
 def get_instrument_service(db: Session) -> InstrumentService:
     """Dependency to get instrument service"""
     return InstrumentService(db) 
+
+class InstrumentMappingService:
+    """Service to map instrument IDs to stock names and other details"""
+    
+    def __init__(self):
+        self.instrument_cache: Dict[int, Dict] = {}
+    
+    async def get_stock_info_by_instrument_id(self, instrument_id: int, user: User) -> Optional[Dict]:
+        """Get stock information by instrument ID using IIFL search"""
+        try:
+            # Check cache first
+            if instrument_id in self.instrument_cache:
+                return self.instrument_cache[instrument_id]
+            
+            # Initialize IIFL Connect for market data
+            iifl_client = IIFLConnect(user, api_type="market")
+            
+            # Login to get token
+            login_response = iifl_client.marketdata_login()
+            if login_response.get("type") != "success":
+                logger.error(f"Failed to login to IIFL Market Data API for instrument {instrument_id}")
+                return None
+            
+            # Search for instruments by ID
+            search_response = iifl_client.search_by_instrument_id(instrument_id)
+            
+            # Logout
+            iifl_client.marketdata_logout()
+            
+            if search_response.get("type") == "success" and search_response.get("result"):
+                instruments = search_response["result"]
+                if instruments:
+                    # Get the first matching instrument
+                    instrument = instruments[0]
+                    
+                    stock_info = {
+                        "symbol": instrument.get("Name", f"Unknown_{instrument_id}"),
+                        "name": instrument.get("Description", f"Unknown Instrument {instrument_id}"),
+                        "exchange_segment": instrument.get("ExchangeSegment"),
+                        "series": instrument.get("Series", ""),
+                        "isin": instrument.get("ISIN", ""),
+                        "lot_size": instrument.get("LotSize", 1),
+                        "tick_size": instrument.get("TickSize", 0.01)
+                    }
+                    
+                    # Cache the result
+                    self.instrument_cache[instrument_id] = stock_info
+                    logger.info(f"Found stock info for instrument {instrument_id}: {stock_info['symbol']}")
+                    
+                    return stock_info
+            
+            logger.warning(f"No stock found for instrument ID {instrument_id}")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error getting stock info for instrument {instrument_id}: {str(e)}")
+            return None
+    
+    def get_cached_stock_info(self, instrument_id: int) -> Optional[Dict]:
+        """Get cached stock information"""
+        return self.instrument_cache.get(instrument_id)
+    
+    def clear_cache(self):
+        """Clear the instrument cache"""
+        self.instrument_cache.clear()
+        logger.info("Instrument cache cleared") 

@@ -119,6 +119,53 @@ class IIFLServiceFixed:
                 status_code=500,
                 detail=f"Failed to place order: {str(e)}"
             )
+    
+    def place_order_with_details(self, db: Session, user_id: int, trade_request: TradeRequest, instrument_details: Dict) -> Dict:
+        """Place order using provided instrument details (bypasses hardcoded lookup)"""
+        try:
+            # Validate trade request
+            self._validate_trade_request(trade_request)
+            
+            # Get authenticated IIFLConnect client
+            client = self._get_client(user_id, "interactive")
+            
+            # Use the provided instrument details instead of looking them up
+            logger.info(f"Placing order for user {user_id} with provided instrument details: {instrument_details}")
+            
+            # Determine order type and parameters
+            order_params = self._prepare_order_parameters(trade_request, instrument_details)
+            
+            logger.info(f"Placing order for user {user_id} with params: {order_params}")
+            
+            # Use IIFLConnect's place_order method
+            order_result = client.place_order(**order_params)
+            
+            logger.info(f"Order placed for user {user_id}: {order_result}")
+            
+            # Validate order result
+            if order_result.get("type") != "success":
+                error_msg = order_result.get("description", "Unknown error")
+                logger.error(f"Order placement failed for user {user_id}: {error_msg}")
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"IIFL order placement failed: {error_msg}"
+                )
+            
+            return order_result
+            
+        except HTTPException:
+            # Re-raise HTTPExceptions
+            raise
+        except Exception as e:
+            logger.error(f"Order placement failed for user {user_id}: {traceback.format_exc()}")
+            # Clear cache on error to force re-authentication next time
+            cache_key = f"{user_id}_interactive"
+            if cache_key in self._client_cache:
+                del self._client_cache[cache_key]
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to place order: {str(e)}"
+            )
 
     def _validate_trade_request(self, trade_request: TradeRequest):
         """Validate trade request parameters"""
@@ -145,7 +192,7 @@ class IIFLServiceFixed:
         return instrument.upper() in fno_instruments
 
     def _get_instrument_details(self, client: IIFLConnect, trade_request: TradeRequest) -> Dict:
-        """Get proper instrument details from IIFL"""
+        """Get proper instrument details from IIFL using dynamic search"""
         try:
             exchange_segment = self._get_exchange_segment(trade_request.underlying_instrument)
             
@@ -153,8 +200,8 @@ class IIFLServiceFixed:
             if self._is_futures_options_instrument(trade_request.underlying_instrument):
                 instrument_id = self._get_fno_instrument_id(client, trade_request)
             else:
-                # For cash market instruments, use basic mapping
-                instrument_id = self._get_cash_instrument_id(trade_request.underlying_instrument)
+                # For cash market instruments, use dynamic search instead of hardcoded mapping
+                instrument_id = self._get_cash_instrument_id_dynamic(client, trade_request.underlying_instrument)
             
             return {
                 "exchangeSegment": exchange_segment,
@@ -253,21 +300,56 @@ class IIFLServiceFixed:
         logger.warning(f"Using fallback instrument ID {instrument_id} for {trade_request.underlying_instrument}")
         return instrument_id
 
+    def _get_cash_instrument_id_dynamic(self, client: IIFLConnect, instrument: str) -> int:
+        """Get instrument ID for cash market instruments using dynamic search"""
+        try:
+            logger.info(f"Searching for cash market instrument: {instrument}")
+            
+            # Search for the instrument using IIFL's search API
+            search_result = client.search_by_scriptname(instrument)
+            
+            if search_result.get("type") == "success":
+                instruments = search_result.get("result", [])
+                
+                # Filter for equity stocks (series EQ) and cash market
+                equity_stocks = []
+                for inst in instruments:
+                    if (inst.get("ExchangeSegment") == 1 and  # NSECM
+                        inst.get("Series") == "EQ" and        # Equity series
+                        inst.get("Name", "").upper() == instrument.upper()):
+                        equity_stocks.append(inst)
+                
+                if equity_stocks:
+                    # Use the first matching equity stock
+                    instrument_id = equity_stocks[0].get("ExchangeInstrumentID")
+                    if instrument_id:
+                        logger.info(f"Found {instrument} with instrument ID: {instrument_id}")
+                        return int(instrument_id)
+                    else:
+                        raise ValueError(f"Instrument ID not found for {instrument}")
+                else:
+                    # Try to find any instrument with similar name
+                    for inst in instruments:
+                        if (inst.get("ExchangeSegment") == 1 and  # NSECM
+                            inst.get("Name", "").upper() == instrument.upper()):
+                            instrument_id = inst.get("ExchangeInstrumentID")
+                            if instrument_id:
+                                logger.info(f"Found {instrument} (non-EQ) with instrument ID: {instrument_id}")
+                                return int(instrument_id)
+                    
+                    raise ValueError(f"No equity stock found for {instrument}")
+            else:
+                raise ValueError(f"IIFL search failed for {instrument}: {search_result.get('description', 'Unknown error')}")
+                
+        except Exception as e:
+            logger.error(f"Failed to get dynamic instrument ID for {instrument}: {str(e)}")
+            raise ValueError(f"Failed to find instrument '{instrument}': {str(e)}")
+    
     def _get_cash_instrument_id(self, instrument: str) -> int:
-        """Get instrument ID for cash market instruments"""
-        cash_map = {
-            "RELIANCE": 2885,
-            "TCS": 11536,
-            "HDFC": 1330,
-            "INFY": 1594,
-            "ICICIBANK": 4963,
-            "HINDUNILVR": 1394,
-            "ITC": 1660,
-            "SBIN": 3045,
-            "BHARTIARTL": 271,
-            "AXISBANK": 5902
-        }
-        return cash_map.get(instrument.upper(), 26000)
+        """Legacy method - kept for backward compatibility but not used"""
+        # This method is deprecated - use _get_cash_instrument_id_dynamic instead
+        logger.warning(f"Using deprecated _get_cash_instrument_id for {instrument}. Use dynamic search instead.")
+        return self._get_cash_instrument_id_dynamic(None, instrument)
 
     def _prepare_order_parameters(self, trade_request: TradeRequest, instrument_details: Dict) -> Dict:
         """Prepare order parameters for IIFL API"""
@@ -291,12 +373,24 @@ class IIFLServiceFixed:
         else:
             product_type = "CNC"  # Cash and Carry for equities
         
+        # Convert exchange segment to string format expected by IIFL API
+        exchange_segment_map = {
+            1: "NSECM",  # NSE Cash Market
+            2: "BSECM",  # BSE Cash Market
+            3: "NSEFO",  # NSE F&O
+            4: "BSEFO"   # BSE F&O
+        }
+        
+        exchange_segment = exchange_segment_map.get(
+            instrument_details.get("exchangeSegment"), "NSECM"
+        )
+        
         return {
-            "exchangeSegment": instrument_details["exchangeSegment"],
+            "exchangeSegment": exchange_segment,  # Now a string like "NSECM"
             "exchangeInstrumentID": instrument_details["exchangeInstrumentID"],
             "productType": product_type,
             "orderType": order_type,
-            "orderSide": trade_request.order_type,  # BUY or SELL
+            "orderSide": "BUY" if trade_request.order_type == "BUY" else "SELL",  # Ensure proper order side
             "timeInForce": "DAY",
             "disclosedQuantity": 0,
             "orderQuantity": trade_request.quantity,
