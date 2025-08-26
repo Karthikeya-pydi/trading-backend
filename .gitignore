@@ -166,4 +166,7 @@ dump.rdb
 .pytest_cache/ 
 
 adjusted-eq-data-2025-08-25.csv
-
+nifty.py
+returnsCalculation.py
+screener_scraper.py
+get_all_instruments.py
