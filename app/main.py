@@ -7,7 +7,7 @@ import sys # Import sys for printing directly to stderr if needed
 
 from app.core.config import settings
 from app.core.database import engine, Base # Ensure Base is imported
-from app.api.routes import auth, users, trading, market_data, websocket, iifl, portfolio, returns
+from app.api.routes import auth, users, trading, market_data, websocket, iifl, portfolio, returns, stock_screening
 # from app.core.logging import setup_logging  # ← DISABLED FOR VERCEL
 from app.core.websocket_manager import manager
 from app.services.realtime_service import realtime_service
@@ -74,6 +74,7 @@ app.include_router(websocket.router, prefix="/api", tags=["WebSocket"])
 app.include_router(iifl.router, prefix="/api/iifl", tags=["IIFL Integration"])
 app.include_router(portfolio.router, prefix="/api/portfolio", tags=["Portfolio"])
 app.include_router(returns.router, prefix="/api/returns", tags=["Stock Returns"])
+app.include_router(stock_screening.router, prefix="/api/screening", tags=["Stock Screening"])
 
 @app.get("/")
 async def root():

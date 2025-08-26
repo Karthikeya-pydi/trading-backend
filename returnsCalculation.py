@@ -202,7 +202,7 @@ class ReturnsCalculator:
 def main():
     """Main function to run the analysis"""
     # File path
-    csv_file = "uploads/adjusted-eq-data-2025-08-15.csv"
+    csv_file = "adjusted-eq-data-2025-08-25.csv"
     
     # Create calculator instance
     calculator = ReturnsCalculator(csv_file)
