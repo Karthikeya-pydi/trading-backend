@@ -23,7 +23,15 @@ async def google_login(
 ):
     """Redirect to Google OAuth login"""
     if not settings.google_client_id or not settings.google_redirect_uri:
-        raise auth_http_error(AuthErrorCode.OAUTH_CONFIG_MISSING)
+        # Give a more helpful error message
+        return {
+            "error": "OAuth configuration missing",
+            "message": "Google OAuth is not configured. Please set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in your environment variables.",
+            "current_config": {
+                "google_client_id": settings.google_client_id,
+                "google_redirect_uri": settings.google_redirect_uri
+            }
+        }
 
     # Use frontend URL from environment variable
     frontend_callback = f"{settings.frontend_url}/auth/callback"

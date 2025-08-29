@@ -59,9 +59,14 @@ app = FastAPI(
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[ 
-        "http://localhost:3000",
-        "https://trading-frontend-3enh.vercel.app"],  # In production, replace with specific origins
+    allow_origins=[
+        "http://127.0.0.1:3000",  
+        "http://localhost:3000",  
+        "http://127.0.0.1:8000",  
+        "http://localhost:8000",   
+        "https://trading-frontend-3enh.vercel.app",  # Production frontend
+        "https://trading-backend-oab.info"  # Production backend
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
