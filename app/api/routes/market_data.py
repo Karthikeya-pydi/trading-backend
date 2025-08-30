@@ -14,10 +14,12 @@ from app.models.user import User
 from app.services.iifl_service_fixed import IIFLServiceFixed
 from app.services.iifl_connect import IIFLConnect
 from app.services.market_analytics_service import MarketAnalyticsService
-from app.core.redis_client import get_redis
+import os
+import pandas as pd
+from pathlib import Path
 
-# Redis key prefix for storing nifty data
-REDIS_KEY_PREFIX = "nifty:indices:"
+# Local storage path for nifty indices data
+NIFTY_STORAGE_PATH = Path("uploads/nifty_indices")
 
 router = APIRouter()
 
@@ -47,7 +49,7 @@ async def market_data_info():
             "historical_data": "5-day historical OHLC data",
             "market_analytics": "Market Cap, Returns (1D/1W/1M/6M/1Y), CAGR (5Y), Gap with Nifty",
             "bhavcopy_data": "Historical bhavcopy data from uploaded CSV files",
-            "nifty_indices": "Nifty index constituent data from Redis with dropdown support",
+            "nifty_indices": "Nifty index constituent data from local CSV files with dropdown support",
             "authentication": "Bearer JWT token required",
             "rate_limits": "As per IIFL API limits"
         }
@@ -1051,62 +1053,55 @@ async def get_nifty_indices(
     db: Session = Depends(get_db)
 ):
     """
-    Get list of available Nifty indices from Redis
+    Get list of available Nifty indices from local CSV files
     Returns list of index names for frontend dropdown
     """
     try:
-        redis_client = get_redis()
-        
-        # Get all keys with the nifty prefix
-        pattern = f"{REDIS_KEY_PREFIX}*"
-        keys = redis_client.keys(pattern)
-        
-        if not keys:
-            return {
-                "message": "No Nifty indices found in Redis",
-                "indices": [],
-                "total_count": 0
-            }
+        # Ensure storage directory exists
+        NIFTY_STORAGE_PATH.mkdir(parents=True, exist_ok=True)
         
         indices = []
-        for key in keys:
-            # Remove the prefix to show clean index names
-            index_name = key.replace(REDIS_KEY_PREFIX, '').replace('_', ' ')
-            
-            # Get data size from Redis
-            data = redis_client.get(key)
-            if data:
+        
+        # Scan for CSV files in the storage directory
+        for csv_file in NIFTY_STORAGE_PATH.glob("*.csv"):
+            if csv_file.is_file():
+                # Extract index name from filename
+                index_name = csv_file.stem.replace('_', ' ')
+                
+                # Get file stats
+                stat = csv_file.stat()
+                
+                # Try to get row count from CSV
                 try:
-                    # Parse JSON to get row count
-                    json_data = json.loads(data)
-                    row_count = len(json_data) if isinstance(json_data, list) else 0
-                    
-                    indices.append({
-                        "redis_key": key,
-                        "index_name": index_name,
-                        "total_constituents": row_count,
-                        "data_size_bytes": len(data),
-                        "source": "Redis"
-                    })
-                except json.JSONDecodeError:
-                    logger.warning(f"Invalid JSON data in Redis key: {key}")
-                    continue
+                    df = pd.read_csv(csv_file)
+                    row_count = len(df)
+                except Exception:
+                    row_count = 0
+                
+                indices.append({
+                    "file_path": str(csv_file),
+                    "index_name": index_name,
+                    "total_constituents": row_count,
+                    "data_size_bytes": stat.st_size,
+                    "source": "Local CSV",
+                    "last_modified": pd.Timestamp(stat.st_mtime, unit='s').isoformat()
+                })
         
         # Sort by index name for better UX
         indices.sort(key=lambda x: x["index_name"])
         
         return {
-            "message": "Nifty indices retrieved successfully from Redis",
+            "message": "Nifty indices retrieved successfully from local CSV files",
             "indices": indices,
             "total_count": len(indices),
-            "source": "Redis"
+            "source": "Local CSV Files"
         }
         
     except Exception as e:
-        logger.error(f"Error reading Nifty indices from Redis: {str(e)}")
+        logger.error(f"Error reading Nifty indices from local files: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error reading Nifty indices from Redis: {str(e)}"
+            detail=f"Error reading Nifty indices from local files: {str(e)}"
         )
 
 @router.get("/nifty/{index_name}")
@@ -1116,77 +1111,63 @@ async def get_nifty_index_data(
     db: Session = Depends(get_db)
 ):
     """
-    Get specific Nifty index data by index name from Redis
+    Get specific Nifty index data by index name from local CSV files
     Returns the constituent stocks for the specified index
     """
     try:
-        redis_client = get_redis()
+        # Ensure storage directory exists
+        NIFTY_STORAGE_PATH.mkdir(parents=True, exist_ok=True)
         
-        # Create Redis key for the index
-        redis_key = f"{REDIS_KEY_PREFIX}{index_name.replace(' ', '_').replace('&', 'and')}"
+        # Try to find the CSV file for this index
+        csv_file = None
+        available_indices = []
         
-        # Get data from Redis
-        data = redis_client.get(redis_key)
-        
-        if not data:
-            # Try to find a matching key (case-insensitive)
-            pattern = f"{REDIS_KEY_PREFIX}*"
-            keys = redis_client.keys(pattern)
-            found_key = None
+        # Scan for matching CSV file
+        for file_path in NIFTY_STORAGE_PATH.glob("*.csv"):
+            file_index_name = file_path.stem.replace('_', ' ')
+            available_indices.append(file_index_name)
             
-            for key in keys:
-                # Remove prefix and compare index names
-                key_index_name = key.replace(REDIS_KEY_PREFIX, '').replace('_', ' ')
-                if key_index_name.lower() == index_name.lower():
-                    found_key = key
-                    break
-            
-            if found_key:
-                redis_key = found_key
-                data = redis_client.get(found_key)
-            else:
-                # Get available indices for better error message
-                available_keys = redis_client.keys(pattern)
-                available_indices = [key.replace(REDIS_KEY_PREFIX, '').replace('_', ' ') for key in available_keys]
-                
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Index '{index_name}' not found in Redis. Available indices: {available_indices}"
-                )
+            if file_index_name.lower() == index_name.lower():
+                csv_file = file_path
+                break
         
-        # Parse JSON data
+        if csv_file is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Index '{index_name}' not found in local files. Available indices: {available_indices}"
+            )
+        
+        # Read CSV file
         try:
-            json_data = json.loads(data)
-            records = json_data if isinstance(json_data, list) else []
-            
-            # Get column names from first record if available
-            columns = list(records[0].keys()) if records else []
+            df = pd.read_csv(csv_file)
+            records = df.to_dict('records')
+            columns = list(df.columns) if not df.empty else []
             
             return {
-                "message": f"Nifty index '{index_name}' data retrieved successfully from Redis",
+                "message": f"Nifty index '{index_name}' data retrieved successfully from local CSV",
                 "index_name": index_name,
-                "redis_key": redis_key,
+                "file_path": str(csv_file),
                 "total_constituents": len(records),
-                "data_size_bytes": len(data),
-                "source": "Redis",
+                "data_size_bytes": csv_file.stat().st_size,
+                "source": "Local CSV",
                 "columns": columns,
                 "data": records
             }
             
-        except json.JSONDecodeError as e:
-            logger.error(f"Invalid JSON data in Redis key '{redis_key}': {str(e)}")
+        except Exception as e:
+            logger.error(f"Error reading CSV file '{csv_file}': {str(e)}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Invalid data format in Redis for index '{index_name}'"
+                detail=f"Error reading CSV file for index '{index_name}'"
             )
         
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error reading Nifty index '{index_name}' from Redis: {str(e)}")
+        logger.error(f"Error reading Nifty index '{index_name}' from local files: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error reading Nifty index data from Redis: {str(e)}"
+            detail=f"Error reading Nifty index data from local files: {str(e)}"
         )
 
 @router.get("/nifty/{index_name}/constituents")
@@ -1197,71 +1178,60 @@ async def get_nifty_index_constituents(
     db: Session = Depends(get_db)
 ):
     """
-    Get just the constituent stocks list for a specific Nifty index from Redis
+    Get just the constituent stocks list for a specific Nifty index from local CSV files
     Optional limit parameter to restrict number of results
     """
     try:
-        redis_client = get_redis()
+        # Ensure storage directory exists
+        NIFTY_STORAGE_PATH.mkdir(parents=True, exist_ok=True)
         
-        # Create Redis key for the index
-        redis_key = f"{REDIS_KEY_PREFIX}{index_name.replace(' ', '_').replace('&', 'and')}"
+        # Try to find the CSV file for this index
+        csv_file = None
         
-        # Get data from Redis
-        data = redis_client.get(redis_key)
-        
-        if not data:
-            # Try to find a matching key (case-insensitive)
-            pattern = f"{REDIS_KEY_PREFIX}*"
-            keys = redis_client.keys(pattern)
-            found_key = None
+        # Scan for matching CSV file
+        for file_path in NIFTY_STORAGE_PATH.glob("*.csv"):
+            file_index_name = file_path.stem.replace('_', ' ')
             
-            for key in keys:
-                # Remove prefix and compare index names
-                key_index_name = key.replace(REDIS_KEY_PREFIX, '').replace('_', ' ')
-                if key_index_name.lower() == index_name.lower():
-                    found_key = key
-                    break
-            
-            if found_key:
-                redis_key = found_key
-                data = redis_client.get(found_key)
-            else:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Index '{index_name}' not found in Redis"
-                )
+            if file_index_name.lower() == index_name.lower():
+                csv_file = file_path
+                break
         
-        # Parse JSON data
+        if csv_file is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Index '{index_name}' not found in local files"
+            )
+        
+        # Read CSV file
         try:
-            json_data = json.loads(data)
-            records = json_data if isinstance(json_data, list) else []
+            df = pd.read_csv(csv_file)
+            records = df.to_dict('records')
             
             # Apply limit if specified
             if limit and limit > 0:
                 records = records[:limit]
             
             return {
-                "message": f"Nifty index '{index_name}' constituents retrieved successfully from Redis",
+                "message": f"Nifty index '{index_name}' constituents retrieved successfully from local CSV",
                 "index_name": index_name,
-                "redis_key": redis_key,
                 "total_constituents": len(records),
                 "limit_applied": limit if limit else None,
-                "source": "Redis",
+                "source": "Local CSV",
                 "constituents": records
             }
             
-        except json.JSONDecodeError as e:
-            logger.error(f"Invalid JSON data in Redis key '{redis_key}': {str(e)}")
+        except Exception as e:
+            logger.error(f"Error reading CSV file '{csv_file}': {str(e)}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Invalid data format in Redis for index '{index_name}'"
+                detail=f"Error reading CSV file for index '{index_name}'"
             )
         
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error reading Nifty index constituents '{index_name}' from Redis: {str(e)}")
+        logger.error(f"Error reading Nifty index constituents '{index_name}' from local files: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error reading Nifty index constituents from Redis: {str(e)}"
+            detail=f"Error reading Nifty index constituents from local files: {str(e)}"
         )

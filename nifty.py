@@ -5,17 +5,13 @@ import os
 import time
 import json
 import sys
+from pathlib import Path
 
-# Add the app directory to the path to import the Redis client
+# Add the app directory to the path
 sys.path.append(os.path.join(os.path.dirname(__file__), 'app'))
 
-from core.redis_client import get_redis
-
-# Get Redis client
-redis_client = get_redis()
-
-# Redis key prefix for storing nifty data
-REDIS_KEY_PREFIX = "nifty:indices:"
+# Local storage path for nifty indices data
+NIFTY_STORAGE_PATH = Path("uploads/nifty_indices")
 
 url_dict = {'Nifty 50': '/IndexConstituent/ind_nifty50list.csv',
  'Nifty Next 50': '/IndexConstituent/ind_niftynext50list.csv',
@@ -71,16 +67,17 @@ def fetch_and_save_index(index_name, url_path):
             data = res.read()
             df = pd.read_csv(StringIO(data.decode("utf-8")))
             
-            # Convert DataFrame to JSON for Redis storage
-            json_data = df.to_json(orient='records', date_format='iso')
+            # Ensure storage directory exists
+            NIFTY_STORAGE_PATH.mkdir(parents=True, exist_ok=True)
             
-            # Create Redis key
-            redis_key = f"{REDIS_KEY_PREFIX}{index_name.replace(' ', '_').replace('&', 'and')}"
+            # Create safe filename
+            safe_filename = index_name.replace(' ', '_').replace('&', 'and').replace('/', '_')
+            csv_file_path = NIFTY_STORAGE_PATH / f"{safe_filename}.csv"
             
-            # Save to Redis with expiration (24 hours)
-            redis_client.set(redis_key, json_data, ex=86400)
+            # Save DataFrame to CSV file
+            df.to_csv(csv_file_path, index=False)
             
-            print(f"✓ {index_name}: {len(df)} stocks saved to Redis key '{redis_key}'")
+            print(f"✓ {index_name}: {len(df)} stocks saved to CSV file '{csv_file_path}'")
             return True
             
         else:
@@ -94,84 +91,94 @@ def fetch_and_save_index(index_name, url_path):
         if 'conn' in locals():
             conn.close()
 
-def get_index_from_redis(index_name):
-    """Retrieve index data from Redis"""
+def get_index_from_storage(index_name):
+    """Retrieve index data from local CSV file"""
     try:
-        redis_key = f"{REDIS_KEY_PREFIX}{index_name.replace(' ', '_').replace('&', 'and')}"
-        data = redis_client.get(redis_key)
+        # Create safe filename
+        safe_filename = index_name.replace(' ', '_').replace('&', 'and').replace('/', '_')
+        csv_file_path = NIFTY_STORAGE_PATH / f"{safe_filename}.csv"
         
-        if data:
-            df = pd.read_json(data, orient='records')
-            print(f"✓ Retrieved {index_name} from Redis: {len(df)} stocks")
+        if csv_file_path.exists():
+            df = pd.read_csv(csv_file_path)
+            print(f"✓ Retrieved {index_name} from CSV: {len(df)} stocks")
             return df
         else:
-            print(f"✗ {index_name} not found in Redis")
+            print(f"✗ {index_name} not found in local storage")
             return None
             
     except Exception as e:
-        print(f"✗ Error retrieving {index_name} from Redis: {str(e)}")
+        print(f"✗ Error retrieving {index_name}: {str(e)}")
         return None
 
-def list_all_indices_in_redis():
-    """List all available indices in Redis"""
+def list_all_indices_in_storage():
+    """List all available indices in local storage"""
     try:
-        # Get all keys with the nifty prefix
-        pattern = f"{REDIS_KEY_PREFIX}*"
-        keys = redis_client.keys(pattern)
+        # Ensure storage directory exists
+        NIFTY_STORAGE_PATH.mkdir(parents=True, exist_ok=True)
         
-        if keys:
-            print("Available indices in Redis:")
-            for key in keys:
-                # Remove the prefix to show clean index names
-                index_name = key.replace(REDIS_KEY_PREFIX, '').replace('_', ' ')
+        # Scan for CSV files
+        csv_files = list(NIFTY_STORAGE_PATH.glob("*.csv"))
+        
+        if csv_files:
+            print("Available indices in local storage:")
+            for csv_file in csv_files:
+                index_name = csv_file.stem.replace('_', ' ')
                 print(f"  - {index_name}")
         else:
-            print("No indices found in Redis")
+            print("No indices found in local storage")
             
     except Exception as e:
-        print(f"✗ Error listing indices from Redis: {str(e)}")
+        print(f"✗ Error listing indices from local storage: {str(e)}")
 
-def delete_index_from_redis(index_name):
-    """Delete specific index data from Redis"""
+def delete_index_from_storage(index_name):
+    """Delete specific index data from local storage"""
     try:
-        redis_key = f"{REDIS_KEY_PREFIX}{index_name.replace(' ', '_').replace('&', 'and')}"
-        result = redis_client.delete(redis_key)
+        # Create safe filename
+        safe_filename = index_name.replace(' ', '_').replace('&', 'and').replace('/', '_')
+        csv_file_path = NIFTY_STORAGE_PATH / f"{safe_filename}.csv"
         
-        if result:
-            print(f"✓ Deleted {index_name} from Redis")
+        if csv_file_path.exists():
+            csv_file_path.unlink()
+            print(f"✓ Deleted {index_name} from local storage")
             return True
         else:
-            print(f"✗ {index_name} not found in Redis")
+            print(f"✗ {index_name} not found in local storage")
             return False
             
     except Exception as e:
-        print(f"✗ Error deleting {index_name} from Redis: {str(e)}")
+        print(f"✗ Error deleting {index_name}: {str(e)}")
         return False
 
 def clear_all_nifty_data():
-    """Clear all nifty index data from Redis"""
+    """Clear all nifty index data from local storage"""
     try:
-        pattern = f"{REDIS_KEY_PREFIX}*"
-        keys = redis_client.keys(pattern)
+        # Ensure storage directory exists
+        NIFTY_STORAGE_PATH.mkdir(parents=True, exist_ok=True)
         
-        if keys:
+        # Scan for CSV files
+        csv_files = list(NIFTY_STORAGE_PATH.glob("*.csv"))
+        
+        if csv_files:
             deleted_count = 0
-            for key in keys:
-                if redis_client.delete(key):
+            for csv_file in csv_files:
+                try:
+                    csv_file.unlink()
                     deleted_count += 1
+                except Exception:
+                    pass
             
-            print(f"✓ Cleared {deleted_count} indices from Redis")
+            print(f"✓ Cleared {deleted_count} indices from local storage")
             return deleted_count
         else:
-            print("No nifty indices found in Redis to clear")
+            print("No nifty indices found in local storage to clear")
             return 0
             
     except Exception as e:
-        print(f"✗ Error clearing nifty data from Redis: {str(e)}")
+        print(f"✗ Error clearing nifty data from local storage: {str(e)}")
         return 0
 
 def main():
-    print("Starting to fetch Nifty index data and save to Redis...")
+    print("Starting to fetch Nifty index data and save to local CSV files...")
     print("=" * 60)
     
     successful_fetches = 0
@@ -188,12 +195,12 @@ def main():
             time.sleep(0.5)
     
     print("=" * 60)
-    print(f"Fetching completed! {successful_fetches}/{total_indices} indices successfully saved to Redis.")
-    print(f"All data is stored in Redis with prefix '{REDIS_KEY_PREFIX}'")
+    print(f"Fetching completed! {successful_fetches}/{total_indices} indices successfully saved to local CSV files.")
+    print(f"All data is stored in folder: {NIFTY_STORAGE_PATH}")
     
-    # Show available indices in Redis
+    # Show available indices in local storage
     print("\n" + "=" * 60)
-    list_all_indices_in_redis()
+    list_all_indices_in_storage()
 
 if __name__ == "__main__":
     main()
