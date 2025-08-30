@@ -9,8 +9,8 @@ from app.core.config import settings
 from app.core.database import engine, Base # Ensure Base is imported
 from app.api.routes import auth, users, trading, market_data, websocket, iifl, portfolio, returns, stock_screening
 # from app.core.logging import setup_logging  # ← DISABLED FOR VERCEL
-from app.core.websocket_manager import manager
-from app.services.realtime_service import realtime_service
+# from app.core.websocket_manager import manager  # DISABLED - No Redis
+# from app.services.realtime_service import realtime_service  # DISABLED - No Redis
 
 # Setup logging
 # setup_logging()  # ← DISABLED FOR VERCEL
@@ -31,22 +31,22 @@ async def lifespan(app: FastAPI):
         # You might want to re-raise the exception or handle it more gracefully
         # raise # Uncomment this line if you want the app to crash on table creation failure
 
-    # Start real-time services
-    print("DEBUG: Starting real-time services...", file=sys.stderr)
-    await realtime_service.start()
-    print("DEBUG: Real-time services started.", file=sys.stderr)
+    # Start real-time services (DISABLED - No Redis)
+    print("DEBUG: Real-time services DISABLED - No Redis available", file=sys.stderr)
+    # await realtime_service.start()  # DISABLED
+    # print("DEBUG: Real-time services started.", file=sys.stderr)
 
-    # Start WebSocket Redis listener
-    print("DEBUG: Starting WebSocket Redis listener task...", file=sys.stderr)
-    asyncio.create_task(manager.start_redis_listener())
-    print("DEBUG: WebSocket Redis listener task initiated.", file=sys.stderr)
+    # Start WebSocket Redis listener (DISABLED - No Redis)
+    print("DEBUG: WebSocket Redis listener DISABLED - No Redis available", file=sys.stderr)
+    # asyncio.create_task(manager.start_redis_listener())  # DISABLED
+    # print("DEBUG: WebSocket Redis listener task initiated.", file=sys.stderr)
 
     print("--- APP STARTUP SEQUENCE COMPLETED ---", file=sys.stderr)
     yield
 
     # Shutdown
     print("--- APP SHUTDOWN SEQUENCE INITIATED ---", file=sys.stderr)
-    await realtime_service.stop()
+    # await realtime_service.stop()  # DISABLED - No Redis
     print("--- APP SHUTDOWN SEQUENCE COMPLETED ---", file=sys.stderr)
 
 app = FastAPI(
@@ -89,4 +89,4 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy", "features": ["real-time", "websockets", "notifications"]}
+    return {"status": "healthy", "features": ["nifty-indices", "market-data", "trading", "portfolio"], "redis": "disabled"}
