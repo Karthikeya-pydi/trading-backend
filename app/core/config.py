@@ -43,6 +43,13 @@ class Settings(BaseSettings):
     # frontend_url: str = "https://trading-frontend-3enh.vercel.app"
     backend_url: str = "http://127.0.0.1:8000"  # Backend runs on port 8000
     frontend_url: str = "http://localhost:3000"  # Frontend runs on port 3000
+    
+    # AWS S3 settings
+    aws_access_key_id: Optional[str] = None
+    aws_secret_access_key: Optional[str] = None
+    aws_region: str = "ap-south-1"
+    s3_bucket_name: str = "trading-platform-csvs"
+    
     class Config:
         env_file = ".env"
 
