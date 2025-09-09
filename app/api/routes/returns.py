@@ -50,7 +50,7 @@ async def get_stock_returns(
 @router.get("/all", response_model=StockReturnsListResponse)
 async def get_all_stock_returns(
     limit: Optional[int] = Query(None, description="Maximum number of records to return"),
-    sort_by: str = Query("1_Year", description="Column to sort by (1_Week, 1_Month, 3_Months, 6_Months, 1_Year, 3_Years, 5_Years)"),
+    sort_by: str = Query("1_Year", description="Column to sort by (1_Week, 1_Month, 3_Months, 6_Months, 9_Months, 1_Year, 3_Years, 5_Years, turnover, raw_score, normalized_score)"),
     sort_order: str = Query("desc", description="Sort order (asc or desc)"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)

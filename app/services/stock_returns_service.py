@@ -139,13 +139,17 @@ class StockReturnsService:
                     "latest_date": row['Latest_Date'].isoformat() if pd.notna(row['Latest_Date']) else None,
                     "latest_close": float(row['Latest_Close']) if pd.notna(row['Latest_Close']) else None,
                     "latest_volume": int(row['Latest_Volume']) if pd.notna(row['Latest_Volume']) else None,
+                    "turnover": float(row['Turnover']) if pd.notna(row['Turnover']) else None,
                     "returns_1_week": float(row['1_Week']) if pd.notna(row['1_Week']) else None,
                     "returns_1_month": float(row['1_Month']) if pd.notna(row['1_Month']) else None,
                     "returns_3_months": float(row['3_Months']) if pd.notna(row['3_Months']) else None,
                     "returns_6_months": float(row['6_Months']) if pd.notna(row['6_Months']) else None,
+                    "returns_9_months": float(row['9_Months']) if pd.notna(row['9_Months']) else None,
                     "returns_1_year": float(row['1_Year']) if pd.notna(row['1_Year']) else None,
                     "returns_3_years": float(row['3_Years']) if pd.notna(row['3_Years']) else None,
-                    "returns_5_years": float(row['5_Years']) if pd.notna(row['5_Years']) else None
+                    "returns_5_years": float(row['5_Years']) if pd.notna(row['5_Years']) else None,
+                    "raw_score": float(row['Raw_Score']) if pd.notna(row['Raw_Score']) else None,
+                    "normalized_score": float(row['Normalized_Score']) if pd.notna(row['Normalized_Score']) else None
                 }
                 records.append(record)
             

@@ -10,13 +10,17 @@ class StockReturnsData(BaseModel):
     latest_date: datetime
     latest_close: float
     latest_volume: int
+    turnover: Optional[float] = None
     returns_1_week: Optional[float] = None
     returns_1_month: Optional[float] = None
     returns_3_months: Optional[float] = None
     returns_6_months: Optional[float] = None
+    returns_9_months: Optional[float] = None
     returns_1_year: Optional[float] = None
     returns_3_years: Optional[float] = None
     returns_5_years: Optional[float] = None
+    raw_score: Optional[float] = None
+    normalized_score: Optional[float] = None
 
 class StockReturnsResponse(BaseModel):
     """Schema for stock returns data response"""
