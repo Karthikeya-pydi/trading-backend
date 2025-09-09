@@ -104,7 +104,7 @@ class ReturnsCalculator:
     
     def calculate_turnover(self, symbol_data):
         """
-        Calculate turnover as: (Last 20 active days close price average) × Current volume
+        Calculate turnover as: (Last 6 months close price average) × Current volume
         
         Args:
             symbol_data (DataFrame): Data for a specific symbol
@@ -112,20 +112,23 @@ class ReturnsCalculator:
         Returns:
             float: Turnover value
         """
-        if len(symbol_data) < 20:
+        # Calculate 6 months as approximately 180 days
+        six_months_days = 180
+        
+        if len(symbol_data) < six_months_days:
             return np.nan
         
         # Get the latest date and current volume
         latest_date = symbol_data['Date'].max()
         current_volume = symbol_data[symbol_data['Date'] == latest_date]['Volume'].iloc[0]
         
-        # Get last 20 active days (excluding the current date)
-        historical_data = symbol_data[symbol_data['Date'] < latest_date].tail(20)
+        # Get last 6 months of data (excluding the current date)
+        historical_data = symbol_data[symbol_data['Date'] < latest_date].tail(six_months_days)
         
-        if len(historical_data) < 20:
+        if len(historical_data) < six_months_days:
             return np.nan
         
-        # Calculate average close price of last 20 active days
+        # Calculate average close price of last 6 months
         avg_close_price = historical_data['Close'].mean()
         
         # Calculate turnover
@@ -446,7 +449,7 @@ class ReturnsCalculator:
         if target_date is None:
             target_date = datetime.now().strftime('%Y-%m-%d')
         if output_file is None:
-            output_file = f'stock_returns_{target_date}_with_scores.csv'
+            output_file = f'stock_returns_{target_date}.csv'
             
         print("Starting Stock Returns Analysis with Scoring...")
         print("="*60)
@@ -504,10 +507,10 @@ def main():
     # print(calculator.returns_data.head())
 
 def run_scoring_only():
-    """Run scoring on existing stock_returns_2025-09-08.csv data"""
+    """Run scoring on existing stock_returns_2025-09-09.csv data"""
     # Load existing returns data
-    calculator = ReturnsCalculator("adjusted-eq-data-2025-09-08.csv")
-    calculator.returns_data = pd.read_csv("stock_returns_2025-09-08.csv")
+    calculator = ReturnsCalculator("adjusted-eq-data-2025-09-09.csv")
+    calculator.returns_data = pd.read_csv("stock_returns_2025-09-09.csv")
     
     # Calculate scores
     calculator.calculate_stock_scores()
@@ -516,7 +519,7 @@ def run_scoring_only():
     calculator.display_scoring_summary()
     
     # Save results with scores
-    calculator.save_results("stock_returns_2025-09-08_with_scores.csv")
+    calculator.save_results("stock_returns_2025-09-09.csv")
 
 if __name__ == "__main__":
     main()
