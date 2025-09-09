@@ -1,6 +1,8 @@
 import pandas as pd
 import numpy as np
+import os
 from datetime import datetime, timedelta
+from pathlib import Path
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -16,12 +18,19 @@ class ReturnsCalculator:
         self.data = None
         self.returns_data = None
         
-    def load_data(self, target_date='2025-09-08'):
+    def load_data(self, target_date=None):
         """Load and preprocess the CSV data, filtering for stocks available on target date"""
+        if target_date is None:
+            target_date = datetime.now().strftime('%Y-%m-%d')
+            
         print(f"Loading CSV data for stocks available on {target_date}...")
         
-        # Read the CSV file
-        self.data = pd.read_csv(self.csv_file_path)
+        # Check if data is already loaded (for S3 usage)
+        if self.data is not None:
+            print("Data already loaded, skipping file read...")
+        else:
+            # Read the CSV file
+            self.data = pd.read_csv(self.csv_file_path)
         
         # Convert Date column to datetime
         self.data['Date'] = pd.to_datetime(self.data['Date'])
@@ -403,14 +412,19 @@ class ReturnsCalculator:
             for _, row in bottom_performers.iterrows():
                 print(f"{row['Symbol']:15} {row['1_Year']:8.2f}% ₹{row['Latest_Close']:8.2f}")
     
-    def run_analysis(self, output_file='stock_returns.csv'):
+    def run_analysis(self, output_file=None, target_date=None):
         """Run the complete analysis"""
+        if target_date is None:
+            target_date = datetime.now().strftime('%Y-%m-%d')
+        if output_file is None:
+            output_file = f'stock_returns_{target_date}.csv'
+            
         print("Starting Stock Returns Analysis...")
         print("="*50)
         
         try:
             # Load data
-            self.load_data()
+            self.load_data(target_date)
             
             # Process all symbols
             self.process_all_symbols()
@@ -427,14 +441,19 @@ class ReturnsCalculator:
             print(f"Error during analysis: {str(e)}")
             raise
     
-    def run_analysis_with_scoring(self, output_file='stock_returns_with_scores.csv'):
+    def run_analysis_with_scoring(self, output_file=None, target_date=None):
         """Run the complete analysis including scoring"""
+        if target_date is None:
+            target_date = datetime.now().strftime('%Y-%m-%d')
+        if output_file is None:
+            output_file = f'stock_returns_{target_date}_with_scores.csv'
+            
         print("Starting Stock Returns Analysis with Scoring...")
         print("="*60)
         
         try:
             # Load data
-            self.load_data()
+            self.load_data(target_date)
             
             # Process all symbols
             self.process_all_symbols()
@@ -459,14 +478,27 @@ class ReturnsCalculator:
 
 def main():
     """Main function to run the analysis"""
-    # File path
-    csv_file = "adjusted-eq-data-2025-09-08.csv"
+    # Get current date
+    current_date = datetime.now().strftime('%Y-%m-%d')
+    
+    # File path - try current date first, then fallback to most recent
+    csv_file = f"adjusted-eq-data-{current_date}.csv"
+    
+    if not os.path.exists(csv_file):
+        # Look for the most recent CSV file
+        csv_files = list(Path('.').glob('adjusted-eq-data-*.csv'))
+        if csv_files:
+            csv_file = max(csv_files, key=os.path.getmtime)
+            print(f"Using most recent CSV file: {csv_file}")
+        else:
+            print("No CSV files found!")
+            return
     
     # Create calculator instance
-    calculator = ReturnsCalculator(csv_file)
+    calculator = ReturnsCalculator(str(csv_file))
     
-    # Run analysis with scoring for 8 active stocks
-    calculator.run_analysis_with_scoring('stock_returns_2025-09-08.csv')
+    # Run analysis with scoring
+    calculator.run_analysis_with_scoring()
     
     # You can also access the results programmatically
     # print(calculator.returns_data.head())

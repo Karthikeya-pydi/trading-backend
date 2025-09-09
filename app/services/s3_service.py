@@ -19,6 +19,7 @@ class S3Service:
         self.region = settings.aws_region
         self.nifty_folder = "nifty_indices"
         self.bhavcopy_folder = "bhavcopies"
+        self.adjusted_eq_folder = "adjusted-eq-data"
         
         # Initialize S3 client
         try:
@@ -249,6 +250,54 @@ class S3Service:
             logger.error(f"Error getting available nifty indices: {e}")
             return []
     
+    def get_latest_adjusted_eq_file(self) -> Optional[Dict[str, Any]]:
+        """
+        Get the most recent adjusted-eq-data file from S3
+        
+        Returns:
+            Dictionary containing file metadata or None if no files found
+        """
+        try:
+            objects = self._list_s3_objects(self.adjusted_eq_folder)
+            if objects:
+                obj = objects[0]  # Already sorted by date, newest first
+                return {
+                    'key': obj['key'],
+                    's3_key': obj['key'],
+                    'size': obj['size'],
+                    'last_modified': obj['last_modified'],
+                    'filename': obj['filename']
+                }
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error getting latest adjusted-eq-data file: {e}")
+            return None
+    
+    def get_adjusted_eq_data(self, file_key: str) -> Optional[pd.DataFrame]:
+        """
+        Get adjusted-eq-data from S3 as DataFrame
+        
+        Args:
+            file_key: S3 object key for the adjusted-eq-data file
+            
+        Returns:
+            DataFrame containing adjusted-eq-data or None if error
+        """
+        try:
+            content = self._get_s3_object_content(file_key)
+            if content is None:
+                return None
+            
+            # Read CSV from string content
+            df = pd.read_csv(io.StringIO(content))
+            logger.info(f"Successfully loaded adjusted-eq-data from S3: {file_key}")
+            return df
+            
+        except Exception as e:
+            logger.error(f"Error loading adjusted-eq-data from S3: {e}")
+            return None
+
     def get_bhavcopy_summary(self) -> Dict[str, Any]:
         """
         Get summary of available bhavcopy files from S3
