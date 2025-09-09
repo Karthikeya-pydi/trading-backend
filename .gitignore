@@ -165,5 +165,5 @@ dump.rdb
 # pytest
 .pytest_cache/ 
 
-adjusted-eq-data-2025-08-25.csv
+adjusted-eq-data-2025-09-08.csv
 trading-platform-key.pem
