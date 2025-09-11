@@ -346,6 +346,102 @@ class StockReturnsService:
                 "message": f"Error searching stocks: {str(e)}"
             }
     
+    def get_all_returns(self, limit: Optional[int] = None, sort_by: str = "1_Year", sort_order: str = "desc") -> Dict:
+        """
+        Get all stock returns data with optional filtering and sorting
+        
+        Args:
+            limit: Maximum number of records to return
+            sort_by: Column to sort by (1_Week, 1_Month, 3_Months, 6_Months, 9_Months, 1_Year, 3_Years, 5_Years, turnover, raw_score, normalized_score)
+            sort_order: Sort order (asc or desc)
+        
+        Returns:
+            Dictionary containing all stock returns data
+        """
+        try:
+            if self.data is None:
+                return {
+                    "status": "error",
+                    "message": "Stock returns data not loaded"
+                }
+            
+            # Validate sort_by column
+            valid_sort_columns = ['1_Week', '1_Month', '3_Months', '6_Months', '9_Months', '1_Year', '3_Years', '5_Years', 'Turnover', 'Raw_Score', 'Normalized_Score']
+            if sort_by not in valid_sort_columns:
+                return {
+                    "status": "error",
+                    "message": f"Invalid sort column '{sort_by}'. Valid options: {valid_sort_columns}"
+                }
+            
+            # Validate sort_order
+            if sort_order not in ['asc', 'desc']:
+                return {
+                    "status": "error",
+                    "message": "Sort order must be 'asc' or 'desc'"
+                }
+            
+            # Create a copy of data for sorting
+            data_copy = self.data.copy()
+            
+            # Handle NaN values in sort column
+            if sort_by in data_copy.columns:
+                data_copy = data_copy.dropna(subset=[sort_by])
+            
+            # Sort the data
+            ascending = (sort_order == 'asc')
+            sorted_data = data_copy.sort_values(by=sort_by, ascending=ascending)
+            
+            # Apply limit if specified
+            if limit is not None and limit > 0:
+                sorted_data = sorted_data.head(limit)
+            
+            # Convert to list of dictionaries
+            stocks = []
+            for _, row in sorted_data.iterrows():
+                stock_data = {
+                    "symbol": row['Symbol'],
+                    "fincode": row.get('Fincode', ''),
+                    "isin": row.get('ISIN', ''),
+                    "latest_date": row['Latest_Date'].strftime('%Y-%m-%d'),
+                    "latest_close": float(row['Latest_Close']),
+                    "latest_volume": int(row.get('Latest_Volume', 0)),
+                    "turnover": float(row.get('Turnover', 0)),
+                    "returns": {
+                        "1_week": float(row.get('1_Week', 0)),
+                        "1_month": float(row.get('1_Month', 0)),
+                        "3_months": float(row.get('3_Months', 0)),
+                        "6_months": float(row.get('6_Months', 0)),
+                        "9_months": float(row.get('9_Months', 0)),
+                        "1_year": float(row.get('1_Year', 0)),
+                        "3_years": float(row.get('3_Years', 0)),
+                        "5_years": float(row.get('5_Years', 0))
+                    }
+                }
+                
+                # Add scores if available
+                if 'Raw_Score' in row and pd.notna(row['Raw_Score']):
+                    stock_data["scores"] = {
+                        "raw_score": float(row['Raw_Score']),
+                        "normalized_score": float(row.get('Normalized_Score', 0))
+                    }
+                
+                stocks.append(stock_data)
+            
+            return {
+                "status": "success",
+                "total_count": len(stocks),
+                "sort_by": sort_by,
+                "sort_order": sort_order,
+                "stocks": stocks
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting all returns: {e}")
+            return {
+                "status": "error",
+                "message": f"Error retrieving all stock returns: {str(e)}"
+            }
+    
     def get_data_summary(self) -> Dict:
         """
         Get overall summary of the loaded data
