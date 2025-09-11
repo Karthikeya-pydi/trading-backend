@@ -280,39 +280,3 @@ async def market_data_websocket_public(websocket: WebSocket):
     except Exception as e:
         logger.error(f"Public market data WebSocket error: {e}")
 
-@router.get("/market-data/test-connection")
-async def test_market_data_connection(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Test IIFL market data connection for WebSocket streaming"""
-    if not current_user.iifl_market_api_key:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="IIFL Market Data credentials not configured"
-        )
-    
-    try:
-        # Test connection to IIFL
-        realtime_service = RealtimeMarketService(current_user, db)
-        test_result = await realtime_service.test_connection()
-        
-        return {
-            "type": "success",
-            "message": "Market data connection test successful",
-            "websocket_endpoint": f"/api/ws/market-data/{current_user.id}",
-            "test_result": test_result,
-            "instructions": {
-                "connect": f"ws://localhost:8000/api/ws/market-data/{current_user.id}?token={{your_jwt_token}}",
-                "subscribe": '{"type": "subscribe_stock", "stock_name": "RELIANCE"}',
-                "unsubscribe": '{"type": "unsubscribe_stock", "stock_name": "RELIANCE"}',
-                "get_subscriptions": '{"type": "get_subscriptions"}'
-            }
-        }
-        
-    except Exception as e:
-        logger.error(f"Market data connection test failed: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Market data connection test failed: {str(e)}"
-        )

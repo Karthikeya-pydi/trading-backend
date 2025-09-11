@@ -158,20 +158,6 @@ async def refresh_token(
     except Exception:
         raise auth_http_error(AuthErrorCode.INVALID_TOKEN)
 
-@router.get("/me", response_model=UserProfile)
-async def get_current_user_profile(
-    current_user: User = Depends(get_current_user)
-):
-    """Get current user profile"""
-    return UserProfile(
-        id=current_user.id,
-        email=current_user.email,
-        name=current_user.name,
-        profile_picture=current_user.profile_picture,
-        is_verified=current_user.is_verified,
-        has_iifl_market_credentials=bool(current_user.iifl_market_api_key),
-        has_iifl_interactive_credentials=bool(current_user.iifl_interactive_api_key)
-    )
 
 @router.post("/logout")
 async def logout():

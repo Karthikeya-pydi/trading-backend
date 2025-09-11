@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from app.core.database import get_db
 from app.api.dependencies import get_current_user
 from app.models.user import User
-from app.schemas.user import IIFLCredentials, User as UserSchema
+from app.schemas.user import User as UserSchema
 from app.core.security import encrypt_data
 
 router = APIRouter()
@@ -62,51 +62,3 @@ async def set_iifl_credentials(
             detail=f"Failed to save {credentials.api_type} credentials: {str(e)}"
         )
 
-@router.post("/iifl-credentials")
-async def save_iifl_credentials(
-    credentials: IIFLCredentials,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Save IIFL API credentials for the user"""
-    try:
-        # Encrypt and save Market credentials
-        current_user.iifl_market_api_key = encrypt_data(credentials.market.api_key)
-        current_user.iifl_market_secret_key = encrypt_data(credentials.market.secret_key)
-        current_user.iifl_market_user_id = credentials.market.user_id
-        
-        # Encrypt and save Interactive credentials
-        current_user.iifl_interactive_api_key = encrypt_data(credentials.interactive.api_key)
-        current_user.iifl_interactive_secret_key = encrypt_data(credentials.interactive.secret_key)
-        current_user.iifl_interactive_user_id = credentials.interactive.user_id
-        
-        db.commit()
-        
-        return {"message": "IIFL credentials saved successfully"}
-        
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to save credentials: {str(e)}"
-        )
-
-@router.delete("/iifl-credentials")
-async def delete_iifl_credentials(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Delete IIFL API credentials"""
-    # Clear Market credentials
-    current_user.iifl_market_api_key = None
-    current_user.iifl_market_secret_key = None
-    current_user.iifl_market_user_id = None
-    
-    # Clear Interactive credentials
-    current_user.iifl_interactive_api_key = None
-    current_user.iifl_interactive_secret_key = None
-    current_user.iifl_interactive_user_id = None
-    
-    db.commit()
-    
-    return {"message": "IIFL credentials deleted successfully"}
