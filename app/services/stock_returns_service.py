@@ -11,7 +11,7 @@ class StockReturnsService:
     """
     
     def __init__(self):
-        self.returns_file = Path("stock_returns_2025-09-09.csv")
+        self.returns_file = Path("stock_returns_2025-09-10.csv")
         self.data = None
         self._load_returns_data()
     
