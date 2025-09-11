@@ -49,6 +49,11 @@ class Settings(BaseSettings):
     aws_secret_access_key: Optional[str] = None
     aws_region: str = "ap-south-1"
     s3_bucket_name: str = "trading-platform-csvs"
+
+    input_aws_access_key_id: Optional[str] = None
+    input_aws_secret_access_key: Optional[str] = None
+    aws_region: str = "ap-south-1"
+    input_s3_bucket_name: str = "trading-platform-csvs"
     
     class Config:
         env_file = ".env"

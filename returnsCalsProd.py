@@ -8,7 +8,7 @@ A streamlined production system for:
 4. Uploading results to S3
 
 S3 Structure:
-- Input: parquet-eq-data/nse_data/Our_Nseadjprice.h5
+- Input: parquet-eq-data/nse_data/[LATEST_H5_FILE] (dynamically selected)
 - Output: trading-platform-csvs/adjusted-eq-data/adjusted-eq-data-YYYY-MM-DD.csv
 """
 
