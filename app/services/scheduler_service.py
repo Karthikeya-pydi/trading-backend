@@ -11,8 +11,7 @@ from loguru import logger
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from returnsCalculation import ReturnsCalculator
-from app.services.s3_service import S3Service
+from returnsCalsProd import ProductionReturnsCalculator
 
 class SchedulerService:
     """
@@ -23,7 +22,11 @@ class SchedulerService:
     def __init__(self):
         self.scheduler = AsyncIOScheduler()
         self.is_running = False
-        self.s3_service = S3Service()
+        # Configuration for production returns calculation
+        self.input_bucket = "parquet-eq-data"
+        self.output_bucket = "trading-platform-csvs"
+        self.h5_key = "nse_data/Our_Nseadjprice.h5"
+        self.output_prefix = "adjusted-eq-data"
         
     async def start(self):
         """Start the scheduler service"""
@@ -32,10 +35,10 @@ class SchedulerService:
             return
             
         try:
-            # Schedule returns calculation to run every day at 6:00 PM (18:00)
+            # Schedule returns calculation to run every day at 9:30 AM
             self.scheduler.add_job(
                 func=self.run_returns_calculation,
-                trigger=CronTrigger(hour=18, minute=0),  # 6:00 PM daily
+                trigger=CronTrigger(hour=9, minute=30),  # 9:30 AM daily
                 id='returns_calculation',
                 name='Daily Returns Calculation',
                 replace_existing=True,
@@ -47,7 +50,7 @@ class SchedulerService:
             self.is_running = True
             
             logger.info("Scheduler service started successfully")
-            logger.info("Returns calculation scheduled for 6:00 PM daily")
+            logger.info("Returns calculation scheduled for 9:30 AM daily")
             
         except Exception as e:
             logger.error(f"Failed to start scheduler service: {e}")
@@ -67,43 +70,41 @@ class SchedulerService:
     
     async def run_returns_calculation(self):
         """
-        Execute the returns calculation for the current date.
-        This method runs automatically every evening at 6:00 PM.
+        Execute the production returns calculation for the current date.
+        This method runs automatically every morning at 9:30 AM.
         """
         try:
-            logger.info("Starting scheduled returns calculation...")
+            logger.info("Starting scheduled production returns calculation...")
             
             # Get current date
             current_date = datetime.now().strftime('%Y-%m-%d')
             
-            # Get the latest adjusted-eq-data file from S3
-            logger.info("Fetching latest adjusted-eq-data file from S3...")
-            s3_file_info = self.s3_service.get_latest_adjusted_eq_file()
+            # AWS Credentials (from environment variables)
+            input_credentials = {
+                'access_key': os.getenv('INPUT_AWS_ACCESS_KEY_ID'),
+                'secret_key': os.getenv('INPUT_AWS_SECRET_ACCESS_KEY')
+            }
             
-            if not s3_file_info:
-                logger.error("No adjusted-eq-data files found in S3")
-                return
+            output_credentials = {
+                'access_key': os.getenv('AWS_ACCESS_KEY_ID'),
+                'secret_key': os.getenv('AWS_SECRET_ACCESS_KEY')
+            }
             
-            logger.info(f"Found latest file in S3: {s3_file_info['filename']}")
-            logger.info(f"File last modified: {s3_file_info['last_modified']}")
+            # Create production calculator instance
+            calculator = ProductionReturnsCalculator(
+                input_bucket=self.input_bucket,
+                output_bucket=self.output_bucket,
+                h5_key=self.h5_key,
+                output_prefix=self.output_prefix,
+                input_credentials=input_credentials,
+                output_credentials=output_credentials
+            )
             
-            # Download the file content from S3
-            logger.info("Downloading file content from S3...")
-            df = self.s3_service.get_adjusted_eq_data(s3_file_info['s3_key'])
+            # Run complete production flow
+            result_s3_key = calculator.run_complete_flow(include_scoring=True)
             
-            if df is None:
-                logger.error("Failed to download file content from S3")
-                return
-            
-            # Create calculator instance and set data directly
-            calculator = ReturnsCalculator("")  # Empty path since we'll set data directly
-            calculator.data = df  # Set the DataFrame directly
-            
-            # Run the analysis with scoring
-            output_file = f"stock_returns_{current_date}.csv"
-            calculator.run_analysis_with_scoring(output_file)
-            
-            logger.info(f"Returns calculation completed successfully. Output saved to: {output_file}")
+            logger.info(f"Production returns calculation completed successfully!")
+            logger.info(f"Results uploaded to: s3://{self.output_bucket}/{result_s3_key}")
             
         except Exception as e:
             logger.error(f"Error during scheduled returns calculation: {e}")
@@ -111,7 +112,7 @@ class SchedulerService:
     
     async def run_returns_calculation_manual(self, target_date: str = None):
         """
-        Manually trigger returns calculation for a specific date.
+        Manually trigger production returns calculation for a specific date.
         
         Args:
             target_date (str): Date in YYYY-MM-DD format. If None, uses current date.
@@ -119,37 +120,35 @@ class SchedulerService:
         if target_date is None:
             target_date = datetime.now().strftime('%Y-%m-%d')
         
-        logger.info(f"Manually triggering returns calculation for {target_date}")
+        logger.info(f"Manually triggering production returns calculation for {target_date}")
         
         try:
-            # Get the latest adjusted-eq-data file from S3
-            logger.info("Fetching latest adjusted-eq-data file from S3...")
-            s3_file_info = self.s3_service.get_latest_adjusted_eq_file()
+            # AWS Credentials (from environment variables)
+            input_credentials = {
+                'access_key': os.getenv('INPUT_AWS_ACCESS_KEY_ID'),
+                'secret_key': os.getenv('INPUT_AWS_SECRET_ACCESS_KEY')
+            }
             
-            if not s3_file_info:
-                logger.error("No adjusted-eq-data files found in S3")
-                return
+            output_credentials = {
+                'access_key': os.getenv('AWS_ACCESS_KEY_ID'),
+                'secret_key': os.getenv('AWS_SECRET_ACCESS_KEY')
+            }
             
-            logger.info(f"Found latest file in S3: {s3_file_info['filename']}")
-            logger.info(f"File last modified: {s3_file_info['last_modified']}")
+            # Create production calculator instance
+            calculator = ProductionReturnsCalculator(
+                input_bucket=self.input_bucket,
+                output_bucket=self.output_bucket,
+                h5_key=self.h5_key,
+                output_prefix=self.output_prefix,
+                input_credentials=input_credentials,
+                output_credentials=output_credentials
+            )
             
-            # Download the file content from S3
-            logger.info("Downloading file content from S3...")
-            df = self.s3_service.get_adjusted_eq_data(s3_file_info['s3_key'])
+            # Run complete production flow
+            result_s3_key = calculator.run_complete_flow(target_date=target_date, include_scoring=True)
             
-            if df is None:
-                logger.error("Failed to download file content from S3")
-                return
-            
-            # Create calculator instance and set data directly
-            calculator = ReturnsCalculator("")  # Empty path since we'll set data directly
-            calculator.data = df  # Set the DataFrame directly
-            
-            # Run the analysis with scoring
-            output_file = f"stock_returns_{target_date}.csv"
-            calculator.run_analysis_with_scoring(output_file)
-            
-            logger.info(f"Manual returns calculation completed successfully. Output saved to: {output_file}")
+            logger.info(f"Manual production returns calculation completed successfully!")
+            logger.info(f"Results uploaded to: s3://{self.output_bucket}/{result_s3_key}")
             
         except Exception as e:
             logger.error(f"Error during manual returns calculation: {e}")

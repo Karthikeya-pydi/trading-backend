@@ -1,32 +1,116 @@
 import pandas as pd
 import numpy as np
+import boto3
+import io
 from typing import Dict, List, Optional
 from datetime import datetime, timedelta
 from loguru import logger
-from pathlib import Path
+import os
 
 class StockReturnsService:
     """
-    Service to handle stock returns data operations
+    Service to handle stock returns data operations from S3
     """
     
     def __init__(self):
-        self.returns_file = Path("stock_returns_2025-09-10.csv")
+        self.s3_bucket = "trading-platform-csvs"
+        self.s3_prefix = "adjusted-eq-data"
         self.data = None
-        self._load_returns_data()
+        self.s3_client = None
+        self._init_s3_client()
+        self._load_returns_data_from_s3()
     
-    def _load_returns_data(self):
-        """Load stock returns data from CSV file"""
+    def _init_s3_client(self):
+        """Initialize S3 client"""
         try:
-            if self.returns_file.exists():
-                self.data = pd.read_csv(self.returns_file)
-                # Convert date columns
-                self.data['Latest_Date'] = pd.to_datetime(self.data['Latest_Date'])
-                logger.info(f"Loaded stock returns data for {len(self.data)} symbols")
-            else:
-                logger.warning("Stock returns file not found. Run returnsCalculation.py first.")
+            self.s3_client = boto3.client('s3')
+            logger.info("S3 client initialized")
         except Exception as e:
-            logger.error(f"Error loading stock returns data: {e}")
+            logger.error(f"Error initializing S3 client: {e}")
+            raise
+    
+    def _get_latest_s3_file(self) -> str:
+        """Get the latest file from S3 bucket"""
+        try:
+            response = self.s3_client.list_objects_v2(
+                Bucket=self.s3_bucket,
+                Prefix=self.s3_prefix
+            )
+            
+            if 'Contents' not in response:
+                raise ValueError("No files found in S3 bucket")
+            
+            # Get all CSV files and sort by last modified date
+            csv_files = [
+                obj for obj in response['Contents'] 
+                if obj['Key'].endswith('.csv')
+            ]
+            
+            if not csv_files:
+                raise ValueError("No CSV files found in S3 bucket")
+            
+            # Sort by last modified date (newest first)
+            latest_file = max(csv_files, key=lambda x: x['LastModified'])
+            
+            logger.info(f"Latest file found: {latest_file['Key']}")
+            return latest_file['Key']
+            
+        except Exception as e:
+            logger.error(f"Error getting latest S3 file: {e}")
+            raise
+    
+    def _load_returns_data_from_s3(self):
+        """Load stock returns data from latest S3 file"""
+        try:
+            # Get the latest file from S3
+            latest_file_key = self._get_latest_s3_file()
+            
+            # Download the file content
+            response = self.s3_client.get_object(
+                Bucket=self.s3_bucket,
+                Key=latest_file_key
+            )
+            
+            # Read CSV data from S3
+            csv_data = response['Body'].read().decode('utf-8')
+            self.data = pd.read_csv(io.StringIO(csv_data))
+            
+            # Convert date columns
+            self.data['Latest_Date'] = pd.to_datetime(self.data['Latest_Date'])
+            
+            logger.info(f"Loaded stock returns data from S3: {latest_file_key}")
+            logger.info(f"Data contains {len(self.data)} symbols")
+            
+        except Exception as e:
+            logger.error(f"Error loading stock returns data from S3: {e}")
+            raise
+    
+    def refresh_data_from_s3(self):
+        """Refresh data from S3 to get latest data"""
+        try:
+            self._load_returns_data_from_s3()
+            logger.info("Data refreshed from S3 successfully")
+        except Exception as e:
+            logger.error(f"Error refreshing data from S3: {e}")
+            raise
+    
+    def get_latest_file_info(self) -> Dict:
+        """Get information about the latest file being used"""
+        try:
+            latest_file_key = self._get_latest_s3_file()
+            response = self.s3_client.head_object(
+                Bucket=self.s3_bucket,
+                Key=latest_file_key
+            )
+            return {
+                "source": "S3",
+                "file_key": latest_file_key,
+                "last_modified": response['LastModified'],
+                "size_bytes": response['ContentLength'],
+                "bucket": self.s3_bucket
+            }
+        except Exception as e:
+            return {"source": "Error", "error": str(e)}
     
     def get_stock_returns(self, symbol: str) -> Dict:
         """
@@ -53,59 +137,57 @@ class StockReturnsService:
             if symbol_data.empty:
                 return {
                     "status": "error",
-                    "message": f"No returns data found for symbol: {symbol}",
-                    "symbol": symbol
+                    "message": f"Symbol '{symbol}' not found in returns data"
                 }
             
             # Get the first match
-            row = symbol_data.iloc[0]
+            stock_info = symbol_data.iloc[0].to_dict()
             
-            # Format the data
-            formatted_data = {
-                "symbol": row['Symbol'],
-                "fincode": str(row['Fincode']),
-                "isin": row['ISIN'],
-                "latest_date": row['Latest_Date'],
-                "latest_close": float(row['Latest_Close']),
-                "latest_volume": int(row['Latest_Volume']),
-                "returns_1_week": float(row['1_Week']) if pd.notna(row['1_Week']) else None,
-                "returns_1_month": float(row['1_Month']) if pd.notna(row['1_Month']) else None,
-                "returns_3_months": float(row['3_Months']) if pd.notna(row['3_Months']) else None,
-                "returns_6_months": float(row['6_Months']) if pd.notna(row['6_Months']) else None,
-                "returns_1_year": float(row['1_Year']) if pd.notna(row['1_Year']) else None,
-                "returns_3_years": float(row['3_Years']) if pd.notna(row['3_Years']) else None,
-                "returns_5_years": float(row['5_Years']) if pd.notna(row['5_Years']) else None
-            }
-            
+            # Format the response
             return {
                 "status": "success",
-                "symbol": symbol,
-                "data": formatted_data,
-                "source_file": self.returns_file.name,
-                "timestamp": datetime.now().isoformat()
+                "symbol": stock_info['Symbol'],
+                "data": {
+                    "fincode": stock_info.get('Fincode', ''),
+                    "isin": stock_info.get('ISIN', ''),
+                    "latest_date": stock_info['Latest_Date'].strftime('%Y-%m-%d'),
+                    "latest_close": float(stock_info['Latest_Close']),
+                    "latest_volume": int(stock_info.get('Latest_Volume', 0)),
+                    "turnover": float(stock_info.get('Turnover', 0)),
+                    "returns": {
+                        "1_week": float(stock_info.get('1_Week', 0)),
+                        "1_month": float(stock_info.get('1_Month', 0)),
+                        "3_months": float(stock_info.get('3_Months', 0)),
+                        "6_months": float(stock_info.get('6_Months', 0)),
+                        "9_months": float(stock_info.get('9_Months', 0)),
+                        "1_year": float(stock_info.get('1_Year', 0)),
+                        "3_years": float(stock_info.get('3_Years', 0)),
+                        "5_years": float(stock_info.get('5_Years', 0))
+                    },
+                    "scores": {
+                        "raw_score": float(stock_info.get('Raw_Score', 0)),
+                        "normalized_score": float(stock_info.get('Normalized_Score', 0))
+                    }
+                }
             }
             
         except Exception as e:
-            logger.error(f"Error fetching stock returns for {symbol}: {e}")
+            logger.error(f"Error getting stock returns for {symbol}: {e}")
             return {
                 "status": "error",
-                "message": f"Failed to fetch stock returns: {str(e)}",
-                "symbol": symbol
+                "message": f"Error retrieving data for {symbol}: {str(e)}"
             }
     
-    def get_all_returns(self, limit: Optional[int] = None, 
-                       sort_by: str = '1_Year', 
-                       sort_order: str = 'desc') -> Dict:
+    def get_top_performers(self, limit: int = 10, period: str = "1_Year") -> Dict:
         """
-        Get all stock returns data with optional filtering and sorting
+        Get top performing stocks by a specific return period
         
         Args:
-            limit: Maximum number of records to return
-            sort_by: Column to sort by (default: '1_Year')
-            sort_order: Sort order ('asc' or 'desc')
+            limit: Number of top performers to return
+            period: Return period to sort by (e.g., '1_Year', '6_Months')
         
         Returns:
-            Dictionary containing all stock returns data
+            Dictionary containing top performers data
         """
         try:
             if self.data is None:
@@ -114,66 +196,46 @@ class StockReturnsService:
                     "message": "Stock returns data not loaded"
                 }
             
-            # Create a copy for processing
-            processed_data = self.data.copy()
+            if period not in self.data.columns:
+                return {
+                    "status": "error",
+                    "message": f"Invalid period '{period}'. Available periods: {list(self.data.columns)}"
+                }
             
-            # Sort the data
-            if sort_by in processed_data.columns:
-                processed_data = processed_data.sort_values(
-                    by=sort_by, 
-                    ascending=(sort_order == 'asc'),
-                    na_position='last'
-                )
+            # Filter out NaN values and sort by period
+            valid_data = self.data.dropna(subset=[period])
+            top_performers = valid_data.nlargest(limit, period)
             
-            # Apply limit if specified
-            if limit:
-                processed_data = processed_data.head(limit)
-            
-            # Convert to list of dictionaries
-            records = []
-            for _, row in processed_data.iterrows():
-                record = {
+            performers = []
+            for _, row in top_performers.iterrows():
+                performers.append({
                     "symbol": row['Symbol'],
-                    "fincode": str(row['Fincode']),
-                    "isin": row['ISIN'],
-                    "latest_date": row['Latest_Date'].isoformat() if pd.notna(row['Latest_Date']) else None,
-                    "latest_close": float(row['Latest_Close']) if pd.notna(row['Latest_Close']) else None,
-                    "latest_volume": int(row['Latest_Volume']) if pd.notna(row['Latest_Volume']) else None,
-                    "turnover": float(row['Turnover']) if pd.notna(row['Turnover']) else None,
-                    "returns_1_week": float(row['1_Week']) if pd.notna(row['1_Week']) else None,
-                    "returns_1_month": float(row['1_Month']) if pd.notna(row['1_Month']) else None,
-                    "returns_3_months": float(row['3_Months']) if pd.notna(row['3_Months']) else None,
-                    "returns_6_months": float(row['6_Months']) if pd.notna(row['6_Months']) else None,
-                    "returns_9_months": float(row['9_Months']) if pd.notna(row['9_Months']) else None,
-                    "returns_1_year": float(row['1_Year']) if pd.notna(row['1_Year']) else None,
-                    "returns_3_years": float(row['3_Years']) if pd.notna(row['3_Years']) else None,
-                    "returns_5_years": float(row['5_Years']) if pd.notna(row['5_Years']) else None,
-                    "raw_score": float(row['Raw_Score']) if pd.notna(row['Raw_Score']) else None,
-                    "normalized_score": float(row['Normalized_Score']) if pd.notna(row['Normalized_Score']) else None
-                }
-                records.append(record)
+                    "return_percent": float(row[period]),
+                    "latest_close": float(row['Latest_Close']),
+                    "raw_score": float(row.get('Raw_Score', 0)),
+                    "normalized_score": float(row.get('Normalized_Score', 0))
+                })
             
             return {
                 "status": "success",
-                "data": records,
-                "total_count": len(records),
-                "source_file": self.returns_file.name,
-                "timestamp": datetime.now().isoformat()
+                "period": period,
+                "count": len(performers),
+                "performers": performers
             }
             
         except Exception as e:
-            logger.error(f"Error fetching all stock returns: {e}")
+            logger.error(f"Error getting top performers: {e}")
             return {
                 "status": "error",
-                "message": f"Failed to fetch stock returns: {str(e)}"
+                "message": f"Error retrieving top performers: {str(e)}"
             }
     
-    def get_returns_summary(self) -> Dict:
+    def get_stock_scores_summary(self) -> Dict:
         """
-        Get summary statistics of stock returns data
+        Get summary statistics of stock scores
         
         Returns:
-            Dictionary containing returns summary statistics
+            Dictionary containing score statistics
         """
         try:
             if self.data is None:
@@ -182,63 +244,61 @@ class StockReturnsService:
                     "message": "Stock returns data not loaded"
                 }
             
-            # Calculate summary statistics for each return period
-            return_columns = ['1_Week', '1_Month', '3_Months', '6_Months', '1_Year', '3_Years', '5_Years']
-            summary = {}
+            if 'Raw_Score' not in self.data.columns:
+                return {
+                    "status": "error",
+                    "message": "Score data not available"
+                }
             
-            for col in return_columns:
-                if col in self.data.columns:
-                    valid_returns = self.data[col].dropna()
-                    if len(valid_returns) > 0:
-                        summary[col] = {
-                            "mean": round(float(valid_returns.mean()), 2),
-                            "median": round(float(valid_returns.median()), 2),
-                            "min": round(float(valid_returns.min()), 2),
-                            "max": round(float(valid_returns.max()), 2),
-                            "std": round(float(valid_returns.std()), 2),
-                            "count": len(valid_returns)
-                        }
+            # Get valid scores
+            valid_scores = self.data['Raw_Score'].dropna()
+            valid_norm_scores = self.data['Normalized_Score'].dropna()
             
-            # Get top and bottom performers for 1 year
-            if '1_Year' in self.data.columns:
-                top_performers = self.data.nlargest(5, '1_Year')[['Symbol', '1_Year', 'Latest_Close']]
-                bottom_performers = self.data.nsmallest(5, '1_Year')[['Symbol', '1_Year', 'Latest_Close']]
-                
-                summary['top_performers_1y'] = [
-                    {"symbol": row['Symbol'], "return": float(row['1_Year']), "price": float(row['Latest_Close'])}
-                    for _, row in top_performers.iterrows()
-                ]
-                
-                summary['bottom_performers_1y'] = [
-                    {"symbol": row['Symbol'], "return": float(row['1_Year']), "price": float(row['Latest_Close'])}
-                    for _, row in bottom_performers.iterrows()
-                ]
+            if len(valid_scores) == 0:
+                return {
+                    "status": "error",
+                    "message": "No valid score data found"
+                }
             
             return {
                 "status": "success",
-                "summary": summary,
-                "total_symbols": len(self.data),
-                "source_file": self.returns_file.name,
-                "timestamp": datetime.now().isoformat()
+                "summary": {
+                    "total_stocks": len(self.data),
+                    "stocks_with_scores": len(valid_scores),
+                    "raw_score_stats": {
+                        "mean": float(valid_scores.mean()),
+                        "median": float(valid_scores.median()),
+                        "min": float(valid_scores.min()),
+                        "max": float(valid_scores.max()),
+                        "std": float(valid_scores.std())
+                    },
+                    "normalized_score_stats": {
+                        "mean": float(valid_norm_scores.mean()),
+                        "median": float(valid_norm_scores.median()),
+                        "min": float(valid_norm_scores.min()),
+                        "max": float(valid_norm_scores.max()),
+                        "std": float(valid_norm_scores.std())
+                    }
+                }
             }
             
         except Exception as e:
-            logger.error(f"Error fetching returns summary: {e}")
+            logger.error(f"Error getting score summary: {e}")
             return {
                 "status": "error",
-                "message": f"Failed to fetch returns summary: {str(e)}"
+                "message": f"Error retrieving score summary: {str(e)}"
             }
     
-    def search_symbols(self, query: str, limit: int = 20) -> Dict:
+    def search_stocks(self, query: str, limit: int = 10) -> Dict:
         """
-        Search for symbols by partial match
+        Search for stocks by symbol (partial match)
         
         Args:
-            query: Search query string
+            query: Search query (partial symbol match)
             limit: Maximum number of results to return
         
         Returns:
-            Dictionary containing matching symbols
+            Dictionary containing search results
         """
         try:
             if self.data is None:
@@ -247,66 +307,79 @@ class StockReturnsService:
                     "message": "Stock returns data not loaded"
                 }
             
-            # Search for symbols containing the query (case-insensitive)
-            matching_symbols = self.data[
-                self.data['Symbol'].str.contains(query, case=False, na=False)
-            ]
+            # Search for partial matches (case-insensitive)
+            query_upper = query.strip().upper()
+            matches = self.data[
+                self.data['Symbol'].str.upper().str.contains(query_upper, na=False)
+            ].head(limit)
             
-            # Limit results
-            if limit:
-                matching_symbols = matching_symbols.head(limit)
+            if matches.empty:
+                return {
+                    "status": "success",
+                    "query": query,
+                    "count": 0,
+                    "results": []
+                }
             
-            # Format results
-            symbols = []
-            for _, row in matching_symbols.iterrows():
-                symbols.append({
+            results = []
+            for _, row in matches.iterrows():
+                results.append({
                     "symbol": row['Symbol'],
-                    "fincode": str(row['Fincode']),
-                    "latest_close": float(row['Latest_Close']) if pd.notna(row['Latest_Close']) else None,
-                    "returns_1_year": float(row['1_Year']) if pd.notna(row['1_Year']) else None
+                    "fincode": row.get('Fincode', ''),
+                    "latest_close": float(row['Latest_Close']),
+                    "1_year_return": float(row.get('1_Year', 0)),
+                    "raw_score": float(row.get('Raw_Score', 0)),
+                    "normalized_score": float(row.get('Normalized_Score', 0))
                 })
             
             return {
                 "status": "success",
                 "query": query,
-                "symbols": symbols,
-                "count": len(symbols),
-                "source_file": self.returns_file.name,
-                "timestamp": datetime.now().isoformat()
+                "count": len(results),
+                "results": results
             }
             
         except Exception as e:
-            logger.error(f"Error searching symbols: {e}")
+            logger.error(f"Error searching stocks: {e}")
             return {
                 "status": "error",
-                "message": f"Failed to search symbols: {str(e)}"
+                "message": f"Error searching stocks: {str(e)}"
             }
     
-    def refresh_data(self) -> Dict:
+    def get_data_summary(self) -> Dict:
         """
-        Refresh the stock returns data by reloading from file
+        Get overall summary of the loaded data
         
         Returns:
-            Dictionary containing refresh status
+            Dictionary containing data summary
         """
         try:
-            self._load_returns_data()
-            
-            if self.data is not None:
-                return {
-                    "status": "success",
-                    "message": f"Data refreshed successfully. Loaded {len(self.data)} symbols",
-                    "timestamp": datetime.now().isoformat()
-                }
-            else:
+            if self.data is None:
                 return {
                     "status": "error",
-                    "message": "Failed to refresh data"
+                    "message": "No data loaded"
                 }
-                
+            
+            # Get file info
+            file_info = self.get_latest_file_info()
+            
+            return {
+                "status": "success",
+                "summary": {
+                    "total_symbols": len(self.data),
+                    "data_date_range": {
+                        "earliest": self.data['Latest_Date'].min().strftime('%Y-%m-%d'),
+                        "latest": self.data['Latest_Date'].max().strftime('%Y-%m-%d')
+                    },
+                    "file_info": file_info,
+                    "available_columns": list(self.data.columns),
+                    "has_scores": 'Raw_Score' in self.data.columns
+                }
+            }
+            
         except Exception as e:
-            logger.error(f"Error refreshing data: {e}")
+            logger.error(f"Error getting data summary: {e}")
             return {
                 "status": "error",
-                "message": f"Failed to refresh data: {str(e)}"
+                "message": f"Error retrieving data summary: {str(e)}"
             }
