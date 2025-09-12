@@ -23,6 +23,37 @@ NIFTY_STORAGE_PATH = Path("uploads/nifty_indices")
 
 router = APIRouter()
 
+@router.get("/")
+async def market_data_info():
+    """Market Data API Information"""
+    return {
+        "message": "Market Data API",
+        "version": "2.0.0",
+        "endpoints": {
+            "POST /market-data": "Get real-time market data for instruments",
+            "POST /stock-data": "Get full market data for stock by name (POST)",
+            "GET /stock/{stock_name}": "Get full market data for stock by name (GET)",
+            "POST /ltp": "Get Last Traded Price for instruments", 
+            "GET /instruments/search": "Search instruments by name or symbol",
+            "GET /instruments/master": "Download instrument master data",
+            "GET /bhavcopy": "Get all bhavcopy data from CSV file",
+            "GET /nifty/indices": "Get list of available Nifty indices for dropdown",
+            "GET /nifty/{index_name}": "Get specific Nifty index data and constituents",
+            "GET /nifty/{index_name}/constituents": "Get just the constituent stocks for an index",
+            "WS /ws/market-data": "WebSocket for real-time market data streams"
+        },
+        "features": {
+            "real_time_data": "Live market data from IIFL Binary Market Data API",
+            "stock_search": "Search stocks by name, symbol, or ISIN",
+            "comprehensive_data": "Touchline, Market Depth, OHLC data",
+            "historical_data": "5-day historical OHLC data",
+            "market_analytics": "Market Cap, Returns (1D/1W/1M/6M/1Y), CAGR (5Y), Gap with Nifty",
+            "bhavcopy_data": "Historical bhavcopy data from uploaded CSV files",
+            "nifty_indices": "Nifty index constituent data from local CSV files with dropdown support",
+            "authentication": "Bearer JWT token required",
+            "rate_limits": "As per IIFL API limits"
+        }
+    }
 
 @router.post("/market-data")
 async def get_market_data(
@@ -837,6 +868,143 @@ async def search_instruments(
             detail="Failed to search instruments"
         )
 
+@router.get("/instruments/master")
+async def get_instrument_master(
+    exchange_segments: str = "NSECM,NSEFO,NSECD,NSECO,BSECM,BSEFO,BSECD",
+    include_sample: bool = False,
+    full_data: bool = True,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Download ALL instrument master data from NSE + BSE exchanges
+    
+    Returns complete dataset of ~85,000+ instruments by default including:
+    - NSE: Cash, F&O, Currency, Commodity derivatives  
+    - BSE: Cash, F&O, Currency derivatives
+    
+    Query parameters (optional):
+    - exchange_segments: Filter specific exchanges (default: ALL NSE + BSE)
+    - include_sample: Return only sample data (default: false - returns all)
+    - full_data: Return complete dataset (default: true)
+    
+    Available Exchange Segments:
+    NSE: NSECM, NSEFO, NSECD, NSECO
+    BSE: BSECM, BSEFO, BSECD
+    """
+    if not current_user.iifl_market_api_key:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="IIFL Market Data credentials not configured"
+        )
+    
+    try:
+        iifl_service = IIFLServiceFixed(db)
+        segments = [seg.strip() for seg in exchange_segments.split(",")]
+        master_data = iifl_service.get_instrument_master(db, current_user.id, segments)
+        
+        if master_data.get("type") != "success":
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Failed to fetch instrument master data from IIFL"
+            )
+        
+        # Parse the data
+        raw_result = master_data.get("result", [])
+        raw_instruments = []
+        
+        if isinstance(raw_result, str):
+            raw_instruments = raw_result.strip().split('\n')
+        elif isinstance(raw_result, list):
+            raw_instruments = raw_result
+        
+        # Parse instruments
+        instruments = []
+        parse_errors = 0
+        
+        for raw_instrument in raw_instruments:
+            try:
+                if isinstance(raw_instrument, str) and len(raw_instrument.strip()) > 10:
+                    if '|' in raw_instrument:
+                        parts = raw_instrument.split('|')
+                        if len(parts) >= 15:
+                            parsed_instrument = {
+                                "ExchangeSegment": parts[0],
+                                "ExchangeInstrumentID": parts[1] if parts[1].isdigit() else None,
+                                "InstrumentType": parts[2],
+                                "Name": parts[3],
+                                "DisplayName": parts[4] if parts[4] else parts[3],
+                                "Series": parts[5],
+                                "Symbol": parts[6] if parts[6] else parts[3],
+                                "ISIN": parts[7],
+                                "PriceBandHigh": parts[8],
+                                "PriceBandLow": parts[9],
+                                "LotSize": parts[10],
+                                "TickSize": parts[11],
+                                "Multiplier": parts[12]
+                            }
+                            
+                            if parsed_instrument.get("ExchangeInstrumentID"):
+                                instruments.append(parsed_instrument)
+                                
+            except Exception:
+                parse_errors += 1
+                continue
+        
+        response_data = {
+            "type": "success",
+            "exchange_segments": segments,
+            "total_instruments": len(instruments),
+            "total_raw_entries": len(raw_instruments),
+            "parse_errors": parse_errors,
+            "success_rate": f"{(len(instruments)/len(raw_instruments)*100):.2f}%" if raw_instruments else "0%"
+        }
+        
+        # Include instrument data based on request
+        if full_data and instruments:
+            # Return all instruments
+            all_instruments = []
+            for instrument in instruments:
+                all_instruments.append({
+                    "instrument_id": instrument.get("ExchangeInstrumentID"),
+                    "name": instrument.get("DisplayName"),
+                    "symbol": instrument.get("Symbol"),
+                    "exchange": instrument.get("ExchangeSegment"),
+                    "series": instrument.get("Series"),
+                    "instrument_type": instrument.get("InstrumentType"),
+                    "isin": instrument.get("ISIN"),
+                    "price_band_high": instrument.get("PriceBandHigh"),
+                    "price_band_low": instrument.get("PriceBandLow"),
+                    "lot_size": instrument.get("LotSize"),
+                    "tick_size": instrument.get("TickSize"),
+                    "multiplier": instrument.get("Multiplier")
+                })
+            response_data["instruments"] = all_instruments
+        elif include_sample and instruments:
+            # Return sample data (default)
+            sample_instruments = []
+            for instrument in instruments[:10]:
+                sample_instruments.append({
+                    "instrument_id": instrument.get("ExchangeInstrumentID"),
+                    "name": instrument.get("DisplayName"),
+                    "symbol": instrument.get("Symbol"),
+                    "exchange": instrument.get("ExchangeSegment"),
+                    "series": instrument.get("Series"),
+                    "instrument_type": instrument.get("InstrumentType"),
+                    "isin": instrument.get("ISIN")
+                })
+            response_data["sample_instruments"] = sample_instruments
+        
+        return response_data
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to fetch instrument master: {traceback.format_exc()}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch instrument master data"
+        )
 
 @router.get("/bhavcopy")
 async def get_bhavcopy_data(
@@ -844,29 +1012,21 @@ async def get_bhavcopy_data(
     db: Session = Depends(get_db)
 ):
     """
-    Get all bhavcopy data from S3
+    Get all bhavcopy data from the uploaded CSV file
     Simple endpoint that returns all data without filtering or pagination
     """
     try:
-        from app.services.s3_service import S3Service
+        # Path to the bhavcopy CSV file
+        csv_path = Path("uploads/bhavcopies/sec_bhavdata_full_25082025.csv")
         
-        s3_service = S3Service()
-        
-        # Get latest bhavcopy file from S3
-        file_info = s3_service.get_latest_bhavcopy_file()
-        if not file_info:
+        if not csv_path.exists():
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="No bhavcopy files found in S3"
+                detail="Bhavcopy data file not found"
             )
         
-        # Get data from S3
-        df = s3_service.get_bhavcopy_data(file_info['s3_key'])
-        if df is None:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to load bhavcopy data from S3"
-            )
+        # Read CSV file
+        df = pd.read_csv(csv_path)
         
         # Clean column names by stripping whitespace
         df.columns = df.columns.str.strip()
@@ -875,20 +1035,16 @@ async def get_bhavcopy_data(
         records = df.to_dict('records')
         
         return {
-            "message": "Bhavcopy data retrieved successfully from S3",
+            "message": "Bhavcopy data retrieved successfully",
             "total_records": len(records),
-            "source_file": file_info['filename'],
-            "source": "S3",
             "data": records
         }
         
-    except HTTPException:
-        raise
     except Exception as e:
-        logger.error(f"Error reading bhavcopy data from S3: {str(e)}")
+        logger.error(f"Error reading bhavcopy data: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error reading bhavcopy data from S3: {str(e)}"
+            detail=f"Error reading bhavcopy data: {str(e)}"
         )
 
 @router.get("/nifty/indices")
@@ -897,35 +1053,55 @@ async def get_nifty_indices(
     db: Session = Depends(get_db)
 ):
     """
-    Get list of available Nifty indices from S3
+    Get list of available Nifty indices from local CSV files
     Returns list of index names for frontend dropdown
     """
     try:
-        from app.services.nifty_service import NiftyService
+        # Ensure storage directory exists
+        NIFTY_STORAGE_PATH.mkdir(parents=True, exist_ok=True)
         
-        nifty_service = NiftyService()
-        result = nifty_service.get_index_summary()
+        indices = []
         
-        if result.get("status") != "success":
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=result.get("message", "Failed to fetch nifty indices")
-            )
+        # Scan for CSV files in the storage directory
+        for csv_file in NIFTY_STORAGE_PATH.glob("*.csv"):
+            if csv_file.is_file():
+                # Extract index name from filename
+                index_name = csv_file.stem.replace('_', ' ')
+                
+                # Get file stats
+                stat = csv_file.stat()
+                
+                # Try to get row count from CSV
+                try:
+                    df = pd.read_csv(csv_file)
+                    row_count = len(df)
+                except Exception:
+                    row_count = 0
+                
+                indices.append({
+                    "file_path": str(csv_file),
+                    "index_name": index_name,
+                    "total_constituents": row_count,
+                    "data_size_bytes": stat.st_size,
+                    "source": "Local CSV",
+                    "last_modified": pd.Timestamp(stat.st_mtime, unit='s').isoformat()
+                })
+        
+        # Sort by index name for better UX
+        indices.sort(key=lambda x: x["index_name"])
         
         return {
-            "message": "Nifty indices retrieved successfully from S3",
-            "indices": result.get("indices", []),
-            "total_count": result.get("total_indices", 0),
-            "source": "S3"
+            "message": "Nifty indices retrieved successfully from local CSV files",
+            "indices": indices,
+            "total_count": len(indices),
+            "source": "Local CSV Files"
         }
         
-    except HTTPException:
-        raise
     except Exception as e:
-        logger.error(f"Error reading Nifty indices from S3: {str(e)}")
+        logger.error(f"Error reading Nifty indices from local files: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error reading Nifty indices from S3: {str(e)}"
+            detail=f"Error reading Nifty indices from local files: {str(e)}"
         )
 
 @router.get("/nifty/{index_name}")
@@ -935,46 +1111,63 @@ async def get_nifty_index_data(
     db: Session = Depends(get_db)
 ):
     """
-    Get specific Nifty index data by index name from S3
+    Get specific Nifty index data by index name from local CSV files
     Returns the constituent stocks for the specified index
     """
     try:
-        from app.services.nifty_service import NiftyService
+        # Ensure storage directory exists
+        NIFTY_STORAGE_PATH.mkdir(parents=True, exist_ok=True)
         
-        nifty_service = NiftyService()
-        result = nifty_service.get_index_data(index_name)
+        # Try to find the CSV file for this index
+        csv_file = None
+        available_indices = []
         
-        if result.get("status") != "success":
-            if "not found" in result.get("message", "").lower():
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=result.get("message", f"Index '{index_name}' not found")
-                )
-            else:
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=result.get("message", "Failed to fetch nifty index data")
-                )
+        # Scan for matching CSV file
+        for file_path in NIFTY_STORAGE_PATH.glob("*.csv"):
+            file_index_name = file_path.stem.replace('_', ' ')
+            available_indices.append(file_index_name)
+            
+            if file_index_name.lower() == index_name.lower():
+                csv_file = file_path
+                break
         
-        return {
-            "message": f"Nifty index '{index_name}' data retrieved successfully from S3",
-            "index_name": result.get("index_name"),
-            "filename": result.get("filename"),
-            "s3_key": result.get("s3_key"),
-            "total_constituents": result.get("total_constituents"),
-            "data_size_bytes": result.get("data_size_bytes"),
-            "source": "S3",
-            "columns": result.get("columns"),
-            "data": result.get("data")
-        }
+        if csv_file is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Index '{index_name}' not found in local files. Available indices: {available_indices}"
+            )
+        
+        # Read CSV file
+        try:
+            df = pd.read_csv(csv_file)
+            records = df.to_dict('records')
+            columns = list(df.columns) if not df.empty else []
+            
+            return {
+                "message": f"Nifty index '{index_name}' data retrieved successfully from local CSV",
+                "index_name": index_name,
+                "file_path": str(csv_file),
+                "total_constituents": len(records),
+                "data_size_bytes": csv_file.stat().st_size,
+                "source": "Local CSV",
+                "columns": columns,
+                "data": records
+            }
+            
+        except Exception as e:
+            logger.error(f"Error reading CSV file '{csv_file}': {str(e)}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Error reading CSV file for index '{index_name}'"
+            )
         
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error reading nifty index data from S3: {str(e)}")
+        logger.error(f"Error reading Nifty index '{index_name}' from local files: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error reading nifty index data from S3: {str(e)}"
+            detail=f"Error reading Nifty index data from local files: {str(e)}"
         )
 
 @router.get("/nifty/{index_name}/constituents")
@@ -985,41 +1178,60 @@ async def get_nifty_index_constituents(
     db: Session = Depends(get_db)
 ):
     """
-    Get just the constituent stocks list for a specific Nifty index from S3
+    Get just the constituent stocks list for a specific Nifty index from local CSV files
     Optional limit parameter to restrict number of results
     """
     try:
-        from app.services.nifty_service import NiftyService
+        # Ensure storage directory exists
+        NIFTY_STORAGE_PATH.mkdir(parents=True, exist_ok=True)
         
-        nifty_service = NiftyService()
-        result = nifty_service.get_index_constituents(index_name, limit)
+        # Try to find the CSV file for this index
+        csv_file = None
         
-        if result.get("status") != "success":
-            if "not found" in result.get("message", "").lower():
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=result.get("message", f"Index '{index_name}' not found")
-                )
-            else:
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=result.get("message", "Failed to fetch nifty index constituents")
-                )
+        # Scan for matching CSV file
+        for file_path in NIFTY_STORAGE_PATH.glob("*.csv"):
+            file_index_name = file_path.stem.replace('_', ' ')
+            
+            if file_index_name.lower() == index_name.lower():
+                csv_file = file_path
+                break
         
-        return {
-            "message": f"Nifty index '{index_name}' constituents retrieved successfully from S3",
-            "index_name": result.get("index_name"),
-            "total_constituents": result.get("count"),
-            "limit_applied": limit if limit else None,
-            "source": "S3",
-            "constituents": result.get("constituents", [])
-        }
+        if csv_file is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Index '{index_name}' not found in local files"
+            )
+        
+        # Read CSV file
+        try:
+            df = pd.read_csv(csv_file)
+            records = df.to_dict('records')
+            
+            # Apply limit if specified
+            if limit and limit > 0:
+                records = records[:limit]
+            
+            return {
+                "message": f"Nifty index '{index_name}' constituents retrieved successfully from local CSV",
+                "index_name": index_name,
+                "total_constituents": len(records),
+                "limit_applied": limit if limit else None,
+                "source": "Local CSV",
+                "constituents": records
+            }
+            
+        except Exception as e:
+            logger.error(f"Error reading CSV file '{csv_file}': {str(e)}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Error reading CSV file for index '{index_name}'"
+            )
         
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error reading Nifty index constituents '{index_name}' from S3: {str(e)}")
+        logger.error(f"Error reading Nifty index constituents '{index_name}' from local files: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error reading Nifty index constituents from S3: {str(e)}"
+            detail=f"Error reading Nifty index constituents from local files: {str(e)}"
         )
