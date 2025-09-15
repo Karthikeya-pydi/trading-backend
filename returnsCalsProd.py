@@ -222,13 +222,13 @@ class ProductionReturnsCalculator:
             logger.error(f"Returns calculation failed: {str(e)}")
             raise
     
-    def calculate_stock_scores(self, normalization_method: str = 'percentile') -> pd.DataFrame:
-        """Calculate raw and normalized scores for stocks"""
+    def calculate_stock_scores(self) -> pd.DataFrame:
+        """Calculate raw and normalized scores for stocks using percentile normalization"""
         try:
             if self.returns_data is None:
                 raise ValueError("No returns data available. Run calculate_returns() first.")
             
-            logger.info("Calculating stock scores...")
+            logger.info("Calculating stock scores using percentile normalization...")
             
             # Define weights
             weights = {
@@ -236,52 +236,57 @@ class ProductionReturnsCalculator:
                 '9_Months': 0.40, '1_Year': 0.20
             }
             
-            # Calculate raw scores
+            # Calculate raw scores - work with available data only
             raw_scores = []
+            missing_data_count = 0
             for _, row in self.returns_data.iterrows():
-                required_columns = ['1_Month', '3_Months', '6_Months', '9_Months', '1_Year']
+                available_columns = [col for col in weights.keys() if pd.notna(row[col])]
+                missing_columns = [col for col in weights.keys() if pd.isna(row[col])]
                 
-                if all(pd.notna(row[col]) for col in required_columns):
-                    raw_score = sum(row[col] * weights[col] for col in required_columns) * 100
-                    raw_scores.append(raw_score)
+                if len(available_columns) > 0:
+                    # Calculate weighted sum using only available data
+                    weighted_sum = sum(row[col] * weights[col] for col in available_columns)
+                    
+                    # Normalize by the sum of weights for available columns
+                    total_weight = sum(weights[col] for col in available_columns)
+                    normalized_score = (weighted_sum / total_weight) * 100 if total_weight != 0 else 0
+                    
+                    raw_scores.append(normalized_score)
+                    
+                    # Log missing data for first few stocks (for debugging)
+                    if missing_columns and missing_data_count < 5:
+                        logger.info(f"Stock {row['Symbol']}: Missing data for {missing_columns}, using {available_columns}")
+                        missing_data_count += 1
                 else:
                     raw_scores.append(np.nan)
             
             self.returns_data['Raw_Score'] = raw_scores
             
-            # Calculate normalized scores
+            # Calculate normalized scores using percentile normalization (1st-99th percentile)
             valid_scores = self.returns_data['Raw_Score'].dropna()
             if len(valid_scores) > 0:
-                if normalization_method == 'percentile':
-                    p1, p99 = valid_scores.quantile([0.01, 0.99])
-                    if p99 != p1:
-                        normalized_scores = ((self.returns_data['Raw_Score'] - p1) / (p99 - p1)) * 100
-                        normalized_scores = np.clip(normalized_scores, 0, 100)
-                    else:
-                        normalized_scores = pd.Series([50.0] * len(self.returns_data), index=self.returns_data.index)
-                
-                elif normalization_method == 'zscore':
-                    mean_score, std_score = valid_scores.mean(), valid_scores.std()
-                    if std_score > 0:
-                        z_scores = (self.returns_data['Raw_Score'] - mean_score) / std_score
-                        normalized_scores = 50 + (z_scores * 15)
-                        normalized_scores = np.clip(normalized_scores, 0, 100)
-                    else:
-                        normalized_scores = pd.Series([50.0] * len(self.returns_data), index=self.returns_data.index)
-                
-                elif normalization_method == 'minmax':
-                    min_score, max_score = valid_scores.min(), valid_scores.max()
-                    if max_score != min_score:
-                        normalized_scores = ((self.returns_data['Raw_Score'] - min_score) / (max_score - min_score)) * 100
-                    else:
-                        normalized_scores = pd.Series([50.0] * len(self.returns_data), index=self.returns_data.index)
-                
+                p1, p99 = valid_scores.quantile([0.01, 0.99])
+                if p99 != p1:
+                    normalized_scores = ((self.returns_data['Raw_Score'] - p1) / (p99 - p1)) * 100
+                    normalized_scores = np.clip(normalized_scores, 0, 100)
                 else:
-                    raise ValueError("normalization_method must be 'percentile', 'zscore', or 'minmax'")
+                    normalized_scores = pd.Series([50.0] * len(self.returns_data), index=self.returns_data.index)
                 
                 self.returns_data['Normalized_Score'] = normalized_scores
             else:
                 self.returns_data['Normalized_Score'] = np.nan
+            
+            # Log data availability summary
+            data_availability = {}
+            for col in weights.keys():
+                if col in self.returns_data.columns:
+                    available_count = self.returns_data[col].notna().sum()
+                    total_count = len(self.returns_data)
+                    data_availability[col] = f"{available_count}/{total_count} ({available_count/total_count*100:.1f}%)"
+            
+            logger.info("Data availability by period:")
+            for period, availability in data_availability.items():
+                logger.info(f"  {period}: {availability}")
             
             logger.info(f"Calculated scores for {len(valid_scores)} stocks")
             return self.returns_data
