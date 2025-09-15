@@ -11,6 +11,7 @@ from app.schemas.trading import TradeRequest, MarketDataRequest
 from app.core.security import decrypt_data, encrypt_data
 from app.services.iifl_connect import IIFLConnect
 from app.core.database import get_db
+from app.core.iifl_session_manager import iifl_session_manager
 
 class IIFLService:
     def __init__(self, db: Session):
@@ -84,24 +85,12 @@ class IIFLService:
             raise
     
     def _get_market_session(self, db: Session, user_id: int) -> str:
-        """Get or create market session for user"""
-        if user_id in self._market_sessions:
-            return self._market_sessions[user_id]
-        
-        credentials = self._get_user_credentials(db, user_id, "market")
-        session_token = self._create_session(credentials, "market")
-        self._market_sessions[user_id] = session_token
-        return session_token
+        """Get or create market session for user using session manager"""
+        return iifl_session_manager.get_session_token(db, user_id, "market")
     
     def _get_interactive_session(self, db: Session, user_id: int) -> str:
-        """Get or create interactive session for user"""
-        if user_id in self._interactive_sessions:
-            return self._interactive_sessions[user_id]
-        
-        credentials = self._get_user_credentials(db, user_id, "interactive")
-        session_token = self._create_session(credentials, "interactive")
-        self._interactive_sessions[user_id] = session_token
-        return session_token
+        """Get or create interactive session for user using session manager"""
+        return iifl_session_manager.get_session_token(db, user_id, "interactive")
     
     def place_order(self, db: Session, user_id: int, trade_request: TradeRequest) -> Dict:
         """Place order through IIFL Interactive API"""

@@ -7,6 +7,7 @@ import sys # Import sys for printing directly to stderr if needed
 
 from app.core.config import settings
 from app.core.database import engine, Base # Ensure Base is imported
+from app.core.middleware import TokenRefreshMiddleware
 from app.api.routes import auth, users, trading, market_data, websocket, iifl, portfolio, returns
 from app.services.scheduler_service import scheduler_service
 # from app.core.logging import setup_logging  # ← DISABLED FOR VERCEL
@@ -89,6 +90,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"]
 )
+
+# Token refresh middleware (should be after CORS)
+app.add_middleware(TokenRefreshMiddleware)
 
 # Include routers
 app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])

@@ -124,9 +124,9 @@ async def google_callback(
             jwt_access_token = authorize.create_access_token(subject=email)
             refresh_token = authorize.create_refresh_token(subject=email)
             
-            # ✅ CRITICAL: Redirect back to frontend with token
+            # ✅ CRITICAL: Redirect back to frontend with both tokens
             print(f"OAuth successful, redirecting to: {frontend_callback_url}")
-            return RedirectResponse(f"{frontend_callback_url}?token={jwt_access_token}")
+            return RedirectResponse(f"{frontend_callback_url}?access_token={jwt_access_token}&refresh_token={refresh_token}")
             
     except Exception as e:
         print(f"OAuth error: {str(e)}")  # Use print instead of logger
@@ -152,6 +152,7 @@ async def refresh_token(
         
         return {
             "access_token": new_access_token,
+            "refresh_token": refresh_token,  # Return the same refresh token
             "token_type": "bearer"
         }
         
@@ -160,6 +161,55 @@ async def refresh_token(
 
 
 @router.post("/logout")
-async def logout():
-    """Logout user (client should remove tokens)"""
-    return {"message": "Successfully logged out"}
+async def logout(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Logout user and clear IIFL sessions"""
+    from app.core.iifl_session_manager import iifl_session_manager
+    
+    # Clear IIFL sessions for the user
+    iifl_session_manager.invalidate_user_sessions(current_user.id)
+    
+    return {"message": "Successfully logged out and IIFL sessions cleared"}
+
+@router.get("/test-token-refresh")
+async def test_token_refresh(
+    current_user: User = Depends(get_current_user)
+):
+    """Test endpoint to verify automatic token refresh is working"""
+    return {
+        "message": "Token refresh test successful",
+        "user_email": current_user.email,
+        "note": "If you see this, your token was either valid or automatically refreshed"
+    }
+
+@router.get("/test-iifl-session")
+async def test_iifl_session(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Test endpoint to verify IIFL session management is working"""
+    from app.core.iifl_session_manager import iifl_session_manager
+    
+    try:
+        # Test market session
+        market_token = iifl_session_manager.get_session_token(db, current_user.id, "market")
+        market_status = "✅ Market session active"
+    except Exception as e:
+        market_status = f"❌ Market session failed: {str(e)}"
+    
+    try:
+        # Test interactive session
+        interactive_token = iifl_session_manager.get_session_token(db, current_user.id, "interactive")
+        interactive_status = "✅ Interactive session active"
+    except Exception as e:
+        interactive_status = f"❌ Interactive session failed: {str(e)}"
+    
+    return {
+        "message": "IIFL session test completed",
+        "user_email": current_user.email,
+        "market_session": market_status,
+        "interactive_session": interactive_status,
+        "note": "This tests if IIFL sessions are properly managed and refreshed"
+    }
