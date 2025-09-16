@@ -333,6 +333,41 @@ class S3Service:
                 'message': f'Failed to fetch bhavcopy summary: {str(e)}'
             }
     
+    def get_adjusted_eq_summary(self) -> Dict[str, Any]:
+        """
+        Get summary of available adjusted-eq-data files from S3
+        
+        Returns:
+            Dictionary containing adjusted-eq-data summary
+        """
+        try:
+            objects = self._list_s3_objects(self.adjusted_eq_folder)
+            
+            summary = []
+            for obj in objects:
+                summary.append({
+                    'filename': obj['filename'],
+                    's3_key': obj['key'],
+                    'size_mb': round(obj['size'] / (1024 * 1024), 2),
+                    'last_modified': obj['last_modified'].isoformat(),
+                    'source': 'S3'
+                })
+            
+            return {
+                'status': 'success',
+                'files': summary,
+                'total_files': len(summary),
+                'source': 'S3',
+                'timestamp': datetime.now().isoformat()
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting adjusted-eq-data summary: {e}")
+            return {
+                'status': 'error',
+                'message': f'Failed to fetch adjusted-eq-data summary: {str(e)}'
+            }
+    
     def test_s3_connection(self) -> Dict[str, Any]:
         """
         Test S3 connection and bucket access

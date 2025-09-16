@@ -3,30 +3,38 @@ import numpy as np
 from typing import Dict, List, Optional
 from datetime import datetime, timedelta
 from loguru import logger
-from pathlib import Path
+from .s3_service import S3Service
 
 class StockReturnsService:
     """
-    Service to handle stock returns data operations
+    Service to handle stock returns data operations from S3
     """
     
     def __init__(self):
-        self.returns_file = Path("adjusted-eq-data-2025-09-12.csv")
+        self.s3_service = S3Service()
         self.data = None
-        self._load_returns_data()
+        self.current_file_info = None
     
     def _load_returns_data(self):
-        """Load stock returns data from CSV file"""
+        """Load stock returns data from S3"""
         try:
-            if self.returns_file.exists():
-                self.data = pd.read_csv(self.returns_file)
+            # Get latest file from S3
+            file_info = self.s3_service.get_latest_adjusted_eq_file()
+            if not file_info:
+                logger.warning("No adjusted-eq-data files found in S3")
+                return
+            
+            # Load data from S3
+            self.data = self.s3_service.get_adjusted_eq_data(file_info['s3_key'])
+            if self.data is not None:
                 # Convert date columns
                 self.data['Latest_Date'] = pd.to_datetime(self.data['Latest_Date'])
-                logger.info(f"Loaded stock returns data for {len(self.data)} symbols")
+                self.current_file_info = file_info
+                logger.info(f"Loaded stock returns data for {len(self.data)} symbols from S3")
             else:
-                logger.warning("Stock returns file not found. Run returnsCalculation.py first.")
+                logger.error("Failed to load stock returns data from S3")
         except Exception as e:
-            logger.error(f"Error loading stock returns data: {e}")
+            logger.error(f"Error loading stock returns data from S3: {e}")
     
     def get_stock_returns(self, symbol: str) -> Dict:
         """
@@ -39,10 +47,14 @@ class StockReturnsService:
             Dictionary containing stock returns data or error message
         """
         try:
+            # Load data from S3 if not already loaded
+            if self.data is None:
+                self._load_returns_data()
+            
             if self.data is None:
                 return {
                     "status": "error",
-                    "message": "Stock returns data not loaded"
+                    "message": "Stock returns data not available from S3"
                 }
             
             # Search for symbol (case-insensitive)
@@ -81,7 +93,8 @@ class StockReturnsService:
                 "status": "success",
                 "symbol": symbol,
                 "data": formatted_data,
-                "source_file": self.returns_file.name,
+                "source_file": self.current_file_info['filename'] if self.current_file_info else "unknown",
+                "source": "S3",
                 "timestamp": datetime.now().isoformat()
             }
             
@@ -108,10 +121,14 @@ class StockReturnsService:
             Dictionary containing all stock returns data
         """
         try:
+            # Load data from S3 if not already loaded
+            if self.data is None:
+                self._load_returns_data()
+            
             if self.data is None:
                 return {
                     "status": "error",
-                    "message": "Stock returns data not loaded"
+                    "message": "Stock returns data not available from S3"
                 }
             
             # Create a copy for processing
@@ -157,7 +174,8 @@ class StockReturnsService:
                 "status": "success",
                 "data": records,
                 "total_count": len(records),
-                "source_file": self.returns_file.name,
+                "source_file": self.current_file_info['filename'] if self.current_file_info else "unknown",
+                "source": "S3",
                 "timestamp": datetime.now().isoformat()
             }
             
@@ -176,10 +194,14 @@ class StockReturnsService:
             Dictionary containing returns summary statistics
         """
         try:
+            # Load data from S3 if not already loaded
+            if self.data is None:
+                self._load_returns_data()
+            
             if self.data is None:
                 return {
                     "status": "error",
-                    "message": "Stock returns data not loaded"
+                    "message": "Stock returns data not available from S3"
                 }
             
             # Calculate summary statistics for each return period
@@ -218,7 +240,8 @@ class StockReturnsService:
                 "status": "success",
                 "summary": summary,
                 "total_symbols": len(self.data),
-                "source_file": self.returns_file.name,
+                "source_file": self.current_file_info['filename'] if self.current_file_info else "unknown",
+                "source": "S3",
                 "timestamp": datetime.now().isoformat()
             }
             
@@ -241,10 +264,14 @@ class StockReturnsService:
             Dictionary containing matching symbols
         """
         try:
+            # Load data from S3 if not already loaded
+            if self.data is None:
+                self._load_returns_data()
+            
             if self.data is None:
                 return {
                     "status": "error",
-                    "message": "Stock returns data not loaded"
+                    "message": "Stock returns data not available from S3"
                 }
             
             # Search for symbols containing the query (case-insensitive)
@@ -271,7 +298,8 @@ class StockReturnsService:
                 "query": query,
                 "symbols": symbols,
                 "count": len(symbols),
-                "source_file": self.returns_file.name,
+                "source_file": self.current_file_info['filename'] if self.current_file_info else "unknown",
+                "source": "S3",
                 "timestamp": datetime.now().isoformat()
             }
             
@@ -284,29 +312,52 @@ class StockReturnsService:
     
     def refresh_data(self) -> Dict:
         """
-        Refresh the stock returns data by reloading from file
+        Refresh the stock returns data by reloading from S3
         
         Returns:
             Dictionary containing refresh status
         """
         try:
+            # Clear current data to force reload
+            self.data = None
+            self.current_file_info = None
+            
+            # Reload from S3
             self._load_returns_data()
             
             if self.data is not None:
                 return {
                     "status": "success",
-                    "message": f"Data refreshed successfully. Loaded {len(self.data)} symbols",
+                    "message": f"Data refreshed successfully from S3. Loaded {len(self.data)} symbols",
+                    "source_file": self.current_file_info['filename'] if self.current_file_info else "unknown",
+                    "source": "S3",
                     "timestamp": datetime.now().isoformat()
                 }
             else:
                 return {
                     "status": "error",
-                    "message": "Failed to refresh data"
+                    "message": "Failed to refresh data from S3"
                 }
                 
         except Exception as e:
-            logger.error(f"Error refreshing data: {e}")
+            logger.error(f"Error refreshing data from S3: {e}")
             return {
                 "status": "error",
-                "message": f"Failed to refresh data: {str(e)}"
+                "message": f"Failed to refresh data from S3: {str(e)}"
+            }
+    
+    def get_available_files(self) -> Dict:
+        """
+        Get list of available adjusted-eq-data files from S3
+        
+        Returns:
+            Dictionary containing available files
+        """
+        try:
+            return self.s3_service.get_adjusted_eq_summary()
+        except Exception as e:
+            logger.error(f"Error fetching available files: {e}")
+            return {
+                "status": "error",
+                "message": f"Failed to fetch available files: {str(e)}"
             }
