@@ -136,17 +136,24 @@ def convert_analysis_to_detailed(analysis_results: dict) -> List[StockAnalysisDe
 @router.get("/search")
 async def search_stock_analysis(
     symbol: str = Query(..., description="Stock symbol to search and analyze"),
+    include_h5_status: bool = False,
+    force_refresh: bool = False,
     current_user: User = Depends(get_current_user)
 ):
     """
     Search and analyze a particular stock by symbol.
     
+    Args:
+        symbol: Stock symbol to search and analyze
+        include_h5_status: Include H5 file loading status and performance info
+        force_refresh: Force download fresh H5 data even if cache is valid
+    
     Returns comprehensive analysis data for the specified stock symbol including
     both summary statistics and detailed daily data with anomaly flags.
     """
     try:
-        # Perform analysis for single stock
-        analysis_result = stock_analysis_service.analyze_single_stock(symbol.upper())
+        # Perform analysis for single stock with optional force refresh
+        analysis_result = stock_analysis_service.analyze_single_stock(symbol.upper(), force_refresh=force_refresh)
         
         if 'error' in analysis_result:
             raise HTTPException(status_code=404, detail=analysis_result['error'])
@@ -236,7 +243,7 @@ async def search_stock_analysis(
                 )
                 detailed_data.append(detailed)
         
-        return SingleStockAnalysisResponse(
+        response_data = SingleStockAnalysisResponse(
             symbol=symbol.upper(),
             data_points=analysis_result['data_points'],
             analysis_date=analysis_result['analysis_date'],
@@ -247,6 +254,22 @@ async def search_stock_analysis(
             detailed_data=detailed_data
         )
         
+        # Add H5 file status if requested
+        if include_h5_status:
+            try:
+                h5_info = stock_analysis_service.get_data_info()
+                # Convert to dict and add H5 status
+                response_dict = response_data.dict()
+                response_dict["h5_file_status"] = h5_info
+                return response_dict
+            except Exception as e:
+                # If H5 status fails, return original response with error
+                response_dict = response_data.dict()
+                response_dict["h5_file_status"] = {"error": f"Could not get H5 status: {str(e)}"}
+                return response_dict
+        
+        return response_data
+        
     except HTTPException:
         raise
     except Exception as e:
@@ -254,23 +277,91 @@ async def search_stock_analysis(
 
 
 @router.get("/stocks")
-async def get_available_stocks(current_user: User = Depends(get_current_user)):
+async def get_available_stocks(
+    include_h5_info: bool = False,
+    include_download_url: bool = False,
+    force_refresh: bool = False,
+    current_user: User = Depends(get_current_user)
+):
     """
     Get list of available stock symbols for analysis.
+    
+    Args:
+        include_h5_info: Include H5 file information (size, load time, etc.)
+        include_download_url: Include direct S3 download URL for H5 file
+        force_refresh: Force download fresh H5 data even if cache is valid
     """
     try:
+        # Force refresh data if requested
+        if force_refresh:
+            stock_analysis_service.clear_data_cache()
+        
         stocks = stock_analysis_service.get_unique_stocks()
-        return {"stocks": stocks, "count": len(stocks)}
+        
+        response = {
+            "stocks": stocks, 
+            "count": len(stocks)
+        }
+        
+        # Add H5 file information if requested
+        if include_h5_info:
+            try:
+                h5_info = stock_analysis_service.get_data_info()
+                response["h5_file_info"] = h5_info
+            except Exception as e:
+                response["h5_file_info"] = {"error": f"Could not get H5 info: {str(e)}"}
+        
+        # Add direct download URL if requested
+        if include_download_url:
+            try:
+                from botocore.exceptions import ClientError
+                
+                download_url = stock_analysis_service.s3_service.s3_client.generate_presigned_url(
+                    'get_object',
+                    Params={
+                        'Bucket': 'parquet-eq-data',
+                        'Key': 'nse_data/Our_Nseadjprice.h5'
+                    },
+                    ExpiresIn=3600  # 1 hour
+                )
+                
+                response["h5_download"] = {
+                    "download_url": download_url,
+                    "filename": "Our_Nseadjprice.h5",
+                    "expires_in": 3600,
+                    "message": "Use this URL to download the H5 file directly from S3"
+                }
+            except Exception as e:
+                response["h5_download"] = {"error": f"Could not generate download URL: {str(e)}"}
+        
+        return response
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error getting available stocks: {str(e)}")
 
 @router.post("/clear-cache")
-async def clear_data_cache(current_user: User = Depends(get_current_user)):
+async def clear_data_cache(
+    include_h5_info: bool = True,
+    current_user: User = Depends(get_current_user)
+):
     """
     Clear the cached data to free memory.
+    
+    Args:
+        include_h5_info: Include H5 file information after clearing cache
     """
     try:
         stock_analysis_service.clear_data_cache()
-        return {"message": "Data cache cleared successfully"}
+        
+        response = {"message": "Data cache cleared successfully"}
+        
+        # Add H5 file information if requested
+        if include_h5_info:
+            try:
+                h5_info = stock_analysis_service.get_data_info()
+                response["h5_file_info"] = h5_info
+            except Exception as e:
+                response["h5_file_info"] = {"error": f"Could not get H5 info: {str(e)}"}
+        
+        return response
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error clearing cache: {str(e)}")
