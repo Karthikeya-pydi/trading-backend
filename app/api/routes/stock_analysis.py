@@ -263,3 +263,14 @@ async def get_available_stocks(current_user: User = Depends(get_current_user)):
         return {"stocks": stocks, "count": len(stocks)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error getting available stocks: {str(e)}")
+
+@router.post("/clear-cache")
+async def clear_data_cache(current_user: User = Depends(get_current_user)):
+    """
+    Clear the cached data to free memory.
+    """
+    try:
+        stock_analysis_service.clear_data_cache()
+        return {"message": "Data cache cleared successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error clearing cache: {str(e)}")

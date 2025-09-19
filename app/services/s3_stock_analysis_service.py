@@ -51,6 +51,7 @@ class S3StockAnalysisService:
         self.h5_key = h5_key
         self.data = None
         self.analysis_results = {}
+        self._data_loaded = False  # Add caching flag
         
         # Initialize S3 service
         self.s3_service = S3Service()
@@ -65,6 +66,11 @@ class S3StockAnalysisService:
         Returns:
             DataFrame with stock data
         """
+        # Return cached data if already loaded
+        if self._data_loaded and self.data is not None:
+            logger.info("Using cached data from S3")
+            return self.data
+            
         try:
             logger.info(f"Loading H5 data from S3: s3://{self.input_bucket}/{self.h5_key}")
             
@@ -91,12 +97,21 @@ class S3StockAnalysisService:
             # Sort by Symbol and Date
             self.data = self.data.sort_values(['Symbol', 'Date']).reset_index(drop=True)
             
+            # Mark as loaded
+            self._data_loaded = True
+            
             logger.info(f"Loaded {len(self.data)} records for {self.data['Symbol'].nunique()} stocks from S3")
             return self.data
             
         except Exception as e:
             logger.error(f"Error loading data from S3: {e}")
             raise
+    
+    def clear_data_cache(self):
+        """Clear the cached data to free memory"""
+        self.data = None
+        self._data_loaded = False
+        logger.info("Cleared data cache")
     
     def _convert_h5_to_dataframe(self, h5_data: bytes) -> pd.DataFrame:
         """
