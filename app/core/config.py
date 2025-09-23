@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     # JWT
     jwt_secret_key: str = "your-secret-key-change-this-in-production"
     jwt_algorithm: str = "HS256"
-    access_token_expire_minutes: int = 30
+    access_token_expire_minutes: int = 480  # 8 hours - more reasonable for trading platform
     
     # Google OAuth
     google_client_id: str = "your_google_client_id"  # Set this in .env file

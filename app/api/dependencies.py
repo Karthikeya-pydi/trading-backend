@@ -16,8 +16,12 @@ async def get_current_user(
     authorize: AuthJWT = Depends(get_auth_jwt)
 ) -> User:
     """Get current authenticated user with automatic token refresh"""
-    # Get refresh token from request headers
-    refresh_token = request.headers.get("X-Refresh-Token")
+    # Get refresh token from request headers (multiple possible locations)
+    refresh_token = (
+        request.headers.get("X-Refresh-Token") or 
+        request.headers.get("Authorization-Refresh") or
+        request.cookies.get("refresh_token")
+    )
     
     try:
         # Try to verify token with automatic refresh
@@ -36,9 +40,13 @@ async def get_current_user(
         if iifl_refreshed:
             request.state.iifl_sessions_refreshed = True
             
-    except HTTPException:
-        # If automatic refresh fails, fall back to regular verification
-        email = authorize.verify_token(token.credentials)
+    except HTTPException as e:
+        # If automatic refresh fails, try regular verification
+        try:
+            email = authorize.verify_token(token.credentials)
+        except HTTPException:
+            # Re-raise the original refresh error if regular verification also fails
+            raise e
     
     user = db.query(User).filter(User.email == email).first()
     

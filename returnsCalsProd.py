@@ -174,22 +174,22 @@ class ProductionReturnsCalculator:
             
             # Filter data for target date
             target_date_dt = pd.to_datetime(target_date)
-            symbols_on_target_date = self.data[self.data['Date'] == target_date_dt]['Symbol'].unique()
+            fincodes_on_target_date = self.data[self.data['Date'] == target_date_dt]['Fincode'].unique()
             
-            if len(symbols_on_target_date) == 0:
+            if len(fincodes_on_target_date) == 0:
                 raise ValueError(f"No stocks found with data on {target_date}")
             
-            # Filter data to only include symbols available on target date
-            filtered_data = self.data[self.data['Symbol'].isin(symbols_on_target_date)]
+            # Filter data to only include fincodes available on target date
+            filtered_data = self.data[self.data['Fincode'].isin(fincodes_on_target_date)]
             
-            # Calculate returns for each symbol
+            # Calculate returns for each fincode
             results = []
             periods = {
                 '1_Week': 7, '1_Month': 30, '3_Months': 90, '6_Months': 180,
                 '9_Months': 270, '1_Year': 365, '3_Years': 1095, '5_Years': 1825
             }
             
-            for symbol, group in filtered_data.groupby('Symbol'):
+            for fincode, group in filtered_data.groupby('Fincode'):
                 if len(group) < 2:
                     continue
                 
@@ -199,8 +199,8 @@ class ProductionReturnsCalculator:
                     latest_data = group[group['Date'] == group['Date'].max()].iloc[0]
                     
                     result = {
-                        'Symbol': symbol,
-                        'Fincode': latest_data.get('Fincode', ''),
+                        'Fincode': fincode,
+                        'Symbol': latest_data.get('Symbol', ''),
                         'ISIN': latest_data.get('ISIN', ''),
                         'Latest_Date': latest_data['Date'],
                         'Latest_Close': latest_data['Close'],
@@ -211,11 +211,11 @@ class ProductionReturnsCalculator:
                     results.append(result)
                     
                 except Exception as e:
-                    logger.warning(f"Error processing {symbol}: {str(e)}")
+                    logger.warning(f"Error processing {fincode}: {str(e)}")
                     continue
             
             self.returns_data = pd.DataFrame(results)
-            logger.info(f"Calculated returns for {len(self.returns_data)} symbols")
+            logger.info(f"Calculated returns for {len(self.returns_data)} fincodes")
             return self.returns_data
             
         except Exception as e:
@@ -255,7 +255,7 @@ class ProductionReturnsCalculator:
                     
                     # Log missing data for first few stocks (for debugging)
                     if missing_columns and missing_data_count < 5:
-                        logger.info(f"Stock {row['Symbol']}: Missing data for {missing_columns}, using {available_columns}")
+                        logger.info(f"Stock {row['Fincode']}: Missing data for {missing_columns}, using {available_columns}")
                         missing_data_count += 1
                 else:
                     raw_scores.append(np.nan)
@@ -407,7 +407,7 @@ class ProductionReturnsCalculator:
         print("STOCK RETURNS & SCORING SUMMARY")
         print("="*60)
         
-        print(f"Total symbols processed: {len(self.returns_data)}")
+        print(f"Total fincodes processed: {len(self.returns_data)}")
         print(f"Latest data date: {self.returns_data['Latest_Date'].max()}")
         
         # Display scoring summary if available
@@ -424,9 +424,9 @@ class ProductionReturnsCalculator:
                 
                 # Top 5 performers
                 print(f"\nTop 5 Stocks by Raw Score:")
-                top_stocks = self.returns_data.nlargest(5, 'Raw_Score')[['Symbol', 'Raw_Score', 'Normalized_Score']]
+                top_stocks = self.returns_data.nlargest(5, 'Raw_Score')[['Fincode', 'Symbol', 'Raw_Score', 'Normalized_Score']]
                 for _, row in top_stocks.iterrows():
-                    print(f"  {row['Symbol']}: Raw={row['Raw_Score']:.2f}, Norm={row['Normalized_Score']:.2f}")
+                    print(f"  {row['Fincode']} ({row['Symbol']}): Raw={row['Raw_Score']:.2f}, Norm={row['Normalized_Score']:.2f}")
 
 
 def main():

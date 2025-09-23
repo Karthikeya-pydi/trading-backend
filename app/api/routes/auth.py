@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import select
@@ -141,7 +141,10 @@ async def refresh_token(
 ):
     """Refresh access token using refresh token"""
     try:
-        email = authorize.verify_token(refresh_token)
+        # Verify refresh token properly
+        refresh_payload = authorize.verify_token(refresh_token)
+        email = refresh_payload
+        
         user = db.query(User).filter(User.email == email).first()
         
         if not user:
@@ -172,44 +175,3 @@ async def logout(
     iifl_session_manager.invalidate_user_sessions(current_user.id)
     
     return {"message": "Successfully logged out and IIFL sessions cleared"}
-
-@router.get("/test-token-refresh")
-async def test_token_refresh(
-    current_user: User = Depends(get_current_user)
-):
-    """Test endpoint to verify automatic token refresh is working"""
-    return {
-        "message": "Token refresh test successful",
-        "user_email": current_user.email,
-        "note": "If you see this, your token was either valid or automatically refreshed"
-    }
-
-@router.get("/test-iifl-session")
-async def test_iifl_session(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Test endpoint to verify IIFL session management is working"""
-    from app.core.iifl_session_manager import iifl_session_manager
-    
-    try:
-        # Test market session
-        market_token = iifl_session_manager.get_session_token(db, current_user.id, "market")
-        market_status = "✅ Market session active"
-    except Exception as e:
-        market_status = f"❌ Market session failed: {str(e)}"
-    
-    try:
-        # Test interactive session
-        interactive_token = iifl_session_manager.get_session_token(db, current_user.id, "interactive")
-        interactive_status = "✅ Interactive session active"
-    except Exception as e:
-        interactive_status = f"❌ Interactive session failed: {str(e)}"
-    
-    return {
-        "message": "IIFL session test completed",
-        "user_email": current_user.email,
-        "market_session": market_status,
-        "interactive_session": interactive_status,
-        "note": "This tests if IIFL sessions are properly managed and refreshed"
-    }
