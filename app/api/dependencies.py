@@ -23,6 +23,10 @@ async def get_current_user(
         request.cookies.get("refresh_token")
     )
     
+    email = None
+    new_access_token = None
+    iifl_refreshed = False
+    
     try:
         # Try to verify token with automatic refresh
         email, new_access_token, iifl_refreshed = authorize.verify_token_with_refresh(
@@ -41,11 +45,11 @@ async def get_current_user(
             request.state.iifl_sessions_refreshed = True
             
     except HTTPException as e:
-        # If automatic refresh fails, try regular verification
+        # If automatic refresh fails, try regular verification as fallback
         try:
             email = authorize.verify_token(token.credentials)
         except HTTPException:
-            # Re-raise the original refresh error if regular verification also fails
+            # Both refresh and regular verification failed, raise the original error
             raise e
     
     user = db.query(User).filter(User.email == email).first()
