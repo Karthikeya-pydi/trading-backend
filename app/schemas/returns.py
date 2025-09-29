@@ -46,6 +46,34 @@ class StockReturnsSummaryResponse(BaseModel):
     source_file: str
     timestamp: str
 
+class ReturnsFileInfo(BaseModel):
+    """Schema for returns file information"""
+    filename: str
+    s3_key: str
+    size_mb: float
+    last_modified: str
+    source: str
+
+class ReturnsFilesListResponse(BaseModel):
+    """Schema for returns files list response"""
+    message: str
+    files: List[ReturnsFileInfo]
+    total_files: int
+    source: str
+    timestamp: str
+
+class ReturnsFileDataResponse(BaseModel):
+    """Schema for returns file data response"""
+    status: str
+    message: str
+    data: List[StockReturnsData]
+    total_count: int
+    source_file: str
+    file_size_mb: float
+    last_modified: str
+    source: str
+    timestamp: str
+
 class StockReturnsErrorResponse(BaseModel):
     """Schema for stock returns error responses"""
     status: str

@@ -14,6 +14,10 @@ from app.models.user import User
 from app.services.iifl_service_fixed import IIFLServiceFixed
 from app.services.iifl_connect import IIFLConnect
 from app.services.market_analytics_service import MarketAnalyticsService
+from app.schemas.bhavcopy import (
+    BhavcopyFilesListResponse,
+    BhavcopyFileDataResponse
+)
 import os
 import pandas as pd
 from pathlib import Path
@@ -1006,13 +1010,118 @@ async def get_instrument_master(
             detail="Failed to fetch instrument master data"
         )
 
+@router.get("/bhavcopy/files", response_model=BhavcopyFilesListResponse)
+async def get_bhavcopy_files(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get list of all available bhavcopy files from S3
+    """
+    try:
+        from app.services.bhavcopy_service import BhavcopyService
+        
+        bhavcopy_service = BhavcopyService()
+        result = bhavcopy_service.get_bhavcopy_summary()
+        
+        if result.get("status") != "success":
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=result.get("message", "Failed to fetch bhavcopy files")
+            )
+        
+        return {
+            "message": "Bhavcopy files retrieved successfully from S3",
+            "files": result.get("files", []),
+            "total_files": result.get("total_files", 0),
+            "source": "S3",
+            "timestamp": result.get("timestamp")
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error reading bhavcopy files from S3: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error reading bhavcopy files from S3: {str(e)}"
+        )
+
+@router.get("/bhavcopy/file/{filename}", response_model=BhavcopyFileDataResponse)
+async def get_bhavcopy_file_data(
+    filename: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get bhavcopy data from a specific file
+    """
+    try:
+        from app.services.s3_service import S3Service
+        
+        s3_service = S3Service()
+        
+        # Get all bhavcopy files to find the specific one
+        summary = s3_service.get_bhavcopy_summary()
+        if summary.get('status') != 'success':
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to fetch bhavcopy files list"
+            )
+        
+        # Find the specific file
+        target_file = None
+        for file_info in summary.get('files', []):
+            if file_info['filename'] == filename:
+                target_file = file_info
+                break
+        
+        if not target_file:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Bhavcopy file '{filename}' not found"
+            )
+        
+        # Get data from S3
+        df = s3_service.get_bhavcopy_data(target_file['s3_key'])
+        if df is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to load bhavcopy data from S3"
+            )
+        
+        # Clean column names by stripping whitespace
+        df.columns = df.columns.str.strip()
+        
+        # Convert DataFrame to list of dictionaries
+        records = df.to_dict('records')
+        
+        return {
+            "message": f"Bhavcopy data retrieved successfully from {filename}",
+            "total_records": len(records),
+            "source_file": filename,
+            "file_size_mb": target_file['size_mb'],
+            "last_modified": target_file['last_modified'],
+            "source": "S3",
+            "data": records
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error reading bhavcopy file {filename} from S3: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error reading bhavcopy file from S3: {str(e)}"
+        )
+
 @router.get("/bhavcopy")
 async def get_bhavcopy_data(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
-    Get all bhavcopy data from S3
+    Get all bhavcopy data from S3 (latest file)
     Simple endpoint that returns all data without filtering or pagination
     """
     try:

@@ -40,9 +40,28 @@ class BhavcopySymbolsResponse(BaseModel):
 class BhavcopyFileInfo(BaseModel):
     """Schema for bhavcopy file information"""
     filename: str
+    s3_key: str
     size_mb: float
-    modified: str
-    path: str
+    last_modified: str
+    source: str
+
+class BhavcopyFilesListResponse(BaseModel):
+    """Schema for bhavcopy files list response"""
+    message: str
+    files: List[BhavcopyFileInfo]
+    total_files: int
+    source: str
+    timestamp: str
+
+class BhavcopyFileDataResponse(BaseModel):
+    """Schema for bhavcopy file data response"""
+    message: str
+    total_records: int
+    source_file: str
+    file_size_mb: float
+    last_modified: str
+    source: str
+    data: List[dict]
 
 class BhavcopySummaryResponse(BaseModel):
     """Schema for bhavcopy summary response"""
