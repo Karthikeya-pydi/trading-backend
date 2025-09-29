@@ -5,6 +5,13 @@ class Settings(BaseSettings):
     # Database - defaults to SQLite if not provided
     database_url: str = "sqlite:///./trading_platform.db"
     
+    # Database connection settings
+    database_pool_size: int = 10
+    database_max_overflow: int = 20
+    database_pool_recycle: int = 3600
+    database_connect_timeout: int = 10
+    database_sslmode: str = "prefer"  # prefer, require, disable
+    
     # Redis - defaults to a simple in-memory store if not available
     redis_url: str = "redis://localhost:6379"
     

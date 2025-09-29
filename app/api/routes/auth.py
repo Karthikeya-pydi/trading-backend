@@ -97,28 +97,59 @@ async def google_callback(
             if not email:
                 raise Exception("Could not retrieve email from Google")
 
-            # Find or create user
-            user = db.query(User).filter(User.email == email).first()
-            if not user:
-                print(f"User not found, creating a new user: {email}")  # Use print instead of logger
-                user = User(
-                    email=email,
-                    name=name,
-                    google_id=google_id,
-                    profile_picture=picture,
-                    is_verified=True,
-                )
-                db.add(user)
-            else:
-                # Update user info from Google
-                user.name = name or user.name
-                user.google_id = google_id or user.google_id
-                user.profile_picture = picture or user.profile_picture
-                user.is_verified = True
-            
-            user.last_login_at = datetime.now(timezone.utc)
-            db.commit()
-            db.refresh(user)
+            # Find or create user with retry logic for database connection issues
+            try:
+                user = db.query(User).filter(User.email == email).first()
+                if not user:
+                    print(f"User not found, creating a new user: {email}")  # Use print instead of logger
+                    user = User(
+                        email=email,
+                        name=name,
+                        google_id=google_id,
+                        profile_picture=picture,
+                        is_verified=True,
+                    )
+                    db.add(user)
+                else:
+                    # Update user info from Google
+                    user.name = name or user.name
+                    user.google_id = google_id or user.google_id
+                    user.profile_picture = picture or user.profile_picture
+                    user.is_verified = True
+                
+                user.last_login_at = datetime.now(timezone.utc)
+                db.commit()
+                db.refresh(user)
+                
+            except Exception as db_error:
+                print(f"Database error during user lookup/creation: {db_error}")
+                db.rollback()
+                # Try to reconnect and retry once
+                try:
+                    db.close()
+                    db = next(get_db())
+                    user = db.query(User).filter(User.email == email).first()
+                    if not user:
+                        user = User(
+                            email=email,
+                            name=name,
+                            google_id=google_id,
+                            profile_picture=picture,
+                            is_verified=True,
+                        )
+                        db.add(user)
+                    else:
+                        user.name = name or user.name
+                        user.google_id = google_id or user.google_id
+                        user.profile_picture = picture or user.profile_picture
+                        user.is_verified = True
+                    
+                    user.last_login_at = datetime.now(timezone.utc)
+                    db.commit()
+                    db.refresh(user)
+                except Exception as retry_error:
+                    print(f"Database retry failed: {retry_error}")
+                    raise Exception(f"Database connection failed: {retry_error}")
 
             # Create JWT tokens
             jwt_access_token = authorize.create_access_token(subject=email)
