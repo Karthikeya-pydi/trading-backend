@@ -223,12 +223,12 @@ class ProductionReturnsCalculator:
             raise
     
     def calculate_stock_scores(self) -> pd.DataFrame:
-        """Calculate raw and normalized scores for stocks using percentile normalization"""
+        """Calculate raw scores for stocks"""
         try:
             if self.returns_data is None:
                 raise ValueError("No returns data available. Run calculate_returns() first.")
             
-            logger.info("Calculating stock scores using percentile normalization...")
+            logger.info("Calculating stock scores...")
             
             # Define weights
             weights = {
@@ -245,13 +245,26 @@ class ProductionReturnsCalculator:
                 
                 if len(available_columns) > 0:
                     # Calculate weighted sum using only available data
-                    weighted_sum = sum(row[col] * weights[col] for col in available_columns)
+                    weighted_sum = 0
+                    total_weight = 0
                     
-                    # Normalize by the sum of weights for available columns
-                    total_weight = sum(weights[col] for col in available_columns)
-                    normalized_score = (weighted_sum / total_weight) * 100 if total_weight != 0 else 0
+                    for col in available_columns:
+                        if col == '1_Month':
+                            # Special logic for 1-month: punish negative returns more, reward positive returns less
+                            if row[col] < 0:  # Negative return - punish more
+                                weight = 0.10  # Positive weight to amplify the negative
+                            else:  # Positive return - reward less
+                                weight = -0.10  # Negative weight to reduce the positive
+                        else:
+                            weight = weights[col]
+                        
+                        weighted_sum += row[col] * weight
+                        total_weight += weight
                     
-                    raw_scores.append(normalized_score)
+                    # Calculate raw score without normalization
+                    raw_score = weighted_sum
+                    
+                    raw_scores.append(raw_score)
                     
                     # Log missing data for first few stocks (for debugging)
                     if missing_columns and missing_data_count < 5:
@@ -262,19 +275,7 @@ class ProductionReturnsCalculator:
             
             self.returns_data['Raw_Score'] = raw_scores
             
-            # Calculate normalized scores using percentile normalization (1st-99th percentile)
-            valid_scores = self.returns_data['Raw_Score'].dropna()
-            if len(valid_scores) > 0:
-                p1, p99 = valid_scores.quantile([0.01, 0.99])
-                if p99 != p1:
-                    normalized_scores = ((self.returns_data['Raw_Score'] - p1) / (p99 - p1)) * 100
-                    normalized_scores = np.clip(normalized_scores, 0, 100)
-                else:
-                    normalized_scores = pd.Series([50.0] * len(self.returns_data), index=self.returns_data.index)
-                
-                self.returns_data['Normalized_Score'] = normalized_scores
-            else:
-                self.returns_data['Normalized_Score'] = np.nan
+            # No normalization - raw scores only
             
             # Log data availability summary
             data_availability = {}
@@ -288,12 +289,309 @@ class ProductionReturnsCalculator:
             for period, availability in data_availability.items():
                 logger.info(f"  {period}: {availability}")
             
-            logger.info(f"Calculated scores for {len(valid_scores)} stocks")
+            logger.info(f"Calculated scores for {len(raw_scores)} stocks")
+            
+            # ADDITIONAL: Calculate historical raw scores
+            logger.info("Calculating historical raw scores...")
+            
+            # Calculate historical scores for each stock
+            historical_scores = self._calculate_historical_scores()
+            
+            # Add historical score columns to the dataframe
+            for period in ['1_Week', '1_Month', '3_Months', '6_Months', '9_Months', '1_Year']:
+                score_column = f"{period}_Raw_Score"
+                self.returns_data[score_column] = historical_scores.get(period, np.nan)
+                logger.info(f"Added {score_column} for historical scoring")
+            
+            logger.info(f"Completed weighted scoring and historical scoring")
+            
+            # ADDITIONAL: Calculate percentage changes in scores
+            logger.info("Calculating percentage changes in scores...")
+            self._calculate_score_percentage_changes()
+            
             return self.returns_data
             
         except Exception as e:
             logger.error(f"Score calculation failed: {str(e)}")
             raise
+    
+    def _calculate_score_percentage_changes(self):
+        """Calculate percentage changes in raw scores over different time periods"""
+        try:
+            logger.info("Calculating percentage changes in raw scores...")
+            
+            # Define historical periods
+            historical_periods = ['1_Week', '1_Month', '3_Months', '6_Months', '9_Months', '1_Year']
+            
+            # Calculate percentage changes for each period
+            for period in historical_periods:
+                current_score_col = 'Raw_Score'
+                historical_score_col = f"{period}_Raw_Score"
+                # Convert period name to simpler format for column name
+                period_simple = period.lower().replace('_', '')
+                percentage_change_col = f"%change_{period_simple}"
+                
+                # Calculate percentage change: ((current - historical) / historical) * 100
+                # Handle cases where historical score is 0 or NaN
+                def calculate_percentage_change(current, historical):
+                    if pd.isna(current) or pd.isna(historical) or historical == 0:
+                        return np.nan
+                    return ((current - historical) / abs(historical)) * 100
+                
+                # Apply percentage change calculation
+                self.returns_data[percentage_change_col] = self.returns_data.apply(
+                    lambda row: calculate_percentage_change(
+                        row[current_score_col], 
+                        row[historical_score_col]
+                    ), axis=1
+                )
+                
+                # Log statistics for this period
+                valid_changes = self.returns_data[percentage_change_col].dropna()
+                if len(valid_changes) > 0:
+                    logger.info(f"{period} Score Change: {len(valid_changes)} stocks, "
+                              f"Mean: {valid_changes.mean():.2f}%, "
+                              f"Range: {valid_changes.min():.2f}% to {valid_changes.max():.2f}%")
+                else:
+                    logger.warning(f"No valid percentage changes calculated for {period}")
+            
+            logger.info("Completed percentage change calculations for all periods")
+            
+            # ADDITIONAL: Calculate sign comparison patterns
+            logger.info("Calculating sign comparison patterns...")
+            self._calculate_sign_comparisons()
+            
+        except Exception as e:
+            logger.error(f"Percentage change calculation failed: {str(e)}")
+            raise
+    
+    def _calculate_sign_comparisons(self):
+        """Calculate sign comparison patterns between current and historical scores"""
+        try:
+            logger.info("Calculating sign comparison patterns...")
+            
+            # Define historical periods
+            historical_periods = ['1_Week', '1_Month', '3_Months', '6_Months', '9_Months', '1_Year']
+            
+            # Calculate sign patterns for each period
+            for period in historical_periods:
+                current_score_col = 'Raw_Score'
+                historical_score_col = f"{period}_Raw_Score"
+                # Convert period name to simpler format for column name
+                period_simple = period.lower().replace('_', '')
+                sign_pattern_col = f"symbol_{period_simple}"
+                
+                # Calculate sign pattern: current_sign, historical_sign
+                def calculate_sign_pattern(current, historical):
+                    if pd.isna(current) or pd.isna(historical):
+                        return np.nan
+                    
+                    current_sign = '+' if current >= 0 else '-'
+                    historical_sign = '+' if historical >= 0 else '-'
+                    
+                    return f"{current_sign}, {historical_sign}"
+                
+                # Apply sign pattern calculation
+                self.returns_data[sign_pattern_col] = self.returns_data.apply(
+                    lambda row: calculate_sign_pattern(
+                        row[current_score_col], 
+                        row[historical_score_col]
+                    ), axis=1
+                )
+                
+                # Log statistics for this period
+                valid_patterns = self.returns_data[sign_pattern_col].dropna()
+                if len(valid_patterns) > 0:
+                    pattern_counts = valid_patterns.value_counts()
+                    logger.info(f"{period} Sign Patterns: {len(valid_patterns)} stocks")
+                    for pattern, count in pattern_counts.items():
+                        logger.info(f"  {pattern}: {count} stocks")
+                else:
+                    logger.warning(f"No valid sign patterns calculated for {period}")
+            
+            logger.info("Completed sign comparison calculations for all periods")
+            
+        except Exception as e:
+            logger.error(f"Sign comparison calculation failed: {str(e)}")
+            raise
+    
+    def _calculate_historical_scores(self) -> Dict[str, pd.Series]:
+        """Calculate historical raw scores for each stock at different time points"""
+        try:
+            logger.info("Calculating historical raw scores...")
+            
+            # Get the latest date from current data
+            latest_date = self.returns_data['Latest_Date'].max()
+            logger.info(f"Latest date in data: {latest_date}")
+            
+            # Check available dates in the dataset
+            all_dates = sorted(self.data['Date'].unique())
+            logger.info(f"Available dates range: {all_dates[0]} to {all_dates[-1]} (total: {len(all_dates)} dates)")
+            
+            # Define historical periods
+            historical_periods = {
+                '1_Week': 7,
+                '1_Month': 30, 
+                '3_Months': 90,
+                '6_Months': 180,
+                '9_Months': 270,
+                '1_Year': 365
+            }
+            
+            historical_scores = {}
+            
+            for period_name, days_back in historical_periods.items():
+                logger.info(f"Calculating scores for {period_name} ago...")
+                
+                # Calculate target date
+                target_date = latest_date - timedelta(days=days_back)
+                
+                # Find the closest available date to target_date (within 5 days)
+                available_dates = self.data['Date'].unique()
+                available_dates = available_dates[available_dates <= target_date]
+                
+                if len(available_dates) == 0:
+                    logger.warning(f"No data found before {target_date}, skipping {period_name}")
+                    historical_scores[period_name] = pd.Series([np.nan] * len(self.returns_data), 
+                                                               index=self.returns_data.index)
+                    continue
+                
+                # Get the closest date (most recent before or on target_date)
+                closest_date = available_dates.max()
+                
+                # Check if the closest date is within reasonable range (within 5 days)
+                days_diff = (target_date - closest_date).days
+                if days_diff > 5:
+                    logger.warning(f"Closest available date {closest_date} is {days_diff} days away from target {target_date}, skipping {period_name}")
+                    historical_scores[period_name] = pd.Series([np.nan] * len(self.returns_data), 
+                                                               index=self.returns_data.index)
+                    continue
+                
+                logger.info(f"Using closest date {closest_date} (target was {target_date}, diff: {days_diff} days)")
+                
+                # Get data for the closest date
+                target_date_data = self.data[self.data['Date'] == closest_date]
+                
+                # Calculate returns for that historical date
+                historical_returns = self._calculate_historical_returns(closest_date, target_date_data)
+                
+                if len(historical_returns) == 0:
+                    logger.warning(f"No historical returns calculated for {period_name}")
+                    historical_scores[period_name] = pd.Series([np.nan] * len(self.returns_data), 
+                                                               index=self.returns_data.index)
+                    continue
+                
+                # Use raw scores directly (no normalization)
+                # Map historical scores to current stocks
+                current_scores = []
+                for _, current_stock in self.returns_data.iterrows():
+                    fincode = current_stock['Fincode']
+                    if fincode in historical_returns:
+                        current_scores.append(historical_returns[fincode])
+                    else:
+                        current_scores.append(np.nan)
+                
+                historical_scores[period_name] = pd.Series(current_scores, index=self.returns_data.index)
+                logger.info(f"Calculated {period_name} historical scores for {len([s for s in current_scores if not pd.isna(s)])} stocks")
+            
+            return historical_scores
+            
+        except Exception as e:
+            logger.error(f"Historical score calculation failed: {str(e)}")
+            raise
+    
+    def _calculate_historical_returns(self, target_date: datetime, target_data: pd.DataFrame) -> Dict[str, float]:
+        """Calculate returns for stocks as of a specific historical date"""
+        try:
+            historical_returns = {}
+            
+            # Define periods for historical calculation
+            periods = {
+                '1_Week': 7, '1_Month': 30, '3_Months': 90, '6_Months': 180,
+                '9_Months': 270, '1_Year': 365, '3_Years': 1095, '5_Years': 1825
+            }
+            
+            for fincode in target_data['Fincode'].unique():
+                # Get all data for this fincode up to the target date
+                fincode_data = self.data[(self.data['Fincode'] == fincode) & (self.data['Date'] <= target_date)]
+                
+                if len(fincode_data) < 2:
+                    continue
+                
+                # Calculate returns for this fincode as of the target date
+                returns = self._calculate_symbol_returns_as_of_date(fincode_data, periods, target_date)
+                
+                # Use the same weighted calculation as current scoring
+                weights = {
+                    '1_Month': -0.10, '3_Months': 0.25, '6_Months': 0.25,
+                    '9_Months': 0.40, '1_Year': 0.20
+                }
+                
+                # Calculate weighted score
+                available_columns = [col for col in weights.keys() if pd.notna(returns.get(col, np.nan))]
+                
+                if len(available_columns) > 0:
+                    # Calculate weighted sum using conditional logic for 1-month
+                    weighted_sum = 0
+                    total_weight = 0
+                    
+                    for col in available_columns:
+                        if col == '1_Month':
+                            # Special logic for 1-month: punish negative returns more, reward positive returns less
+                            if returns[col] < 0:  # Negative return - punish more
+                                weight = 0.10  # Positive weight to amplify the negative
+                            else:  # Positive return - reward less
+                                weight = -0.10  # Negative weight to reduce the positive
+                        else:
+                            weight = weights[col]
+                        
+                        weighted_sum += returns[col] * weight
+                        total_weight += weight
+                    
+                    # Calculate raw score without normalization
+                    raw_score = weighted_sum
+                    historical_returns[fincode] = raw_score
+            
+            return historical_returns
+            
+        except Exception as e:
+            logger.error(f"Historical returns calculation failed: {str(e)}")
+            return {}
+    
+    def _calculate_symbol_returns_as_of_date(self, symbol_data: pd.DataFrame, periods: Dict[str, int], target_date: datetime) -> Dict[str, float]:
+        """Calculate returns for a specific symbol as of a specific historical date"""
+        if len(symbol_data) < 2:
+            return {period: np.nan for period in periods.keys()}
+        
+        # Get the price on the target date (or closest available date)
+        target_date_data = symbol_data[symbol_data['Date'] <= target_date]
+        if len(target_date_data) == 0:
+            return {period: np.nan for period in periods.keys()}
+        
+        latest_date_for_target = target_date_data['Date'].max()
+        latest_price = target_date_data[target_date_data['Date'] == latest_date_for_target]['Close'].iloc[0]
+        
+        returns = {}
+        for period_name, days in periods.items():
+            try:
+                historical_target_date = latest_date_for_target - timedelta(days=days)
+                available_dates = symbol_data['Date'].sort_values()
+                historical_data = available_dates[available_dates <= historical_target_date]
+                
+                if len(historical_data) > 0:
+                    closest_date = historical_data.iloc[-1]
+                    historical_price = symbol_data[symbol_data['Date'] == closest_date]['Close'].iloc[0]
+                    
+                    if historical_price > 0:
+                        returns[period_name] = ((latest_price - historical_price) / historical_price) * 100
+                    else:
+                        returns[period_name] = np.nan
+                else:
+                    returns[period_name] = np.nan
+            except:
+                returns[period_name] = np.nan
+                
+        return returns
     
     def _calculate_symbol_returns(self, symbol_data: pd.DataFrame, periods: Dict[str, int]) -> Dict[str, float]:
         """Calculate returns for a specific symbol"""
@@ -326,18 +624,23 @@ class ProductionReturnsCalculator:
         return returns
     
     def _calculate_turnover(self, symbol_data: pd.DataFrame) -> float:
-        """Calculate turnover for a specific symbol"""
-        six_months_days = 180
-        
-        if len(symbol_data) < six_months_days:
-            return np.nan
+        """Calculate turnover for a specific symbol using last 6 months average"""
+        from datetime import timedelta
         
         latest_date = symbol_data['Date'].max()
         current_volume = symbol_data[symbol_data['Date'] == latest_date]['Volume'].iloc[0]
         
-        historical_data = symbol_data[symbol_data['Date'] < latest_date].tail(six_months_days)
+        # Calculate 6 months ago from latest date
+        six_months_ago = latest_date - timedelta(days=180)  # 6 months = ~180 days
         
-        if len(historical_data) < six_months_days:
+        # Get historical data from 6 months ago to latest date (excluding latest)
+        historical_data = symbol_data[
+            (symbol_data['Date'] >= six_months_ago) & 
+            (symbol_data['Date'] < latest_date)
+        ]
+        
+        # Need at least 100 days of data for meaningful average
+        if len(historical_data) < 100:
             return np.nan
         
         avg_close_price = historical_data['Close'].mean()
@@ -418,15 +721,73 @@ class ProductionReturnsCalculator:
                 print(f"  Stocks with scores: {len(valid_scores)}")
                 print(f"  Raw Score - Mean: {valid_scores.mean():.2f}, Range: {valid_scores.min():.2f} to {valid_scores.max():.2f}")
                 
-                if 'Normalized_Score' in self.returns_data.columns:
-                    norm_scores = self.returns_data['Normalized_Score'].dropna()
-                    print(f"  Normalized Score - Mean: {norm_scores.mean():.2f}, Range: {norm_scores.min():.2f} to {norm_scores.max():.2f}")
-                
                 # Top 5 performers
                 print(f"\nTop 5 Stocks by Raw Score:")
-                top_stocks = self.returns_data.nlargest(5, 'Raw_Score')[['Fincode', 'Symbol', 'Raw_Score', 'Normalized_Score']]
+                top_stocks = self.returns_data.nlargest(5, 'Raw_Score')[['Fincode', 'Symbol', 'Raw_Score']]
                 for _, row in top_stocks.iterrows():
-                    print(f"  {row['Fincode']} ({row['Symbol']}): Raw={row['Raw_Score']:.2f}, Norm={row['Normalized_Score']:.2f}")
+                    print(f"  {row['Fincode']} ({row['Symbol']}): Raw={row['Raw_Score']:.2f}")
+        
+        # Display historical raw scores and percentage changes
+        historical_periods = ['1_Week', '1_Month', '3_Months', '6_Months', '9_Months', '1_Year']
+        available_historical_columns = [f"{period}_Raw_Score" for period in historical_periods 
+                                       if f"{period}_Raw_Score" in self.returns_data.columns]
+        
+        if available_historical_columns:
+            print(f"\nHistorical Raw Scores Summary:")
+            print(f"(Shows what each stock's raw score was at different points in the past)")
+            for period in historical_periods:
+                score_col = f"{period}_Raw_Score"
+                if score_col in self.returns_data.columns:
+                    valid_scores = self.returns_data[score_col].dropna()
+                    if len(valid_scores) > 0:
+                        print(f"  {period} ago: Mean={valid_scores.mean():.2f}, Range={valid_scores.min():.2f} to {valid_scores.max():.2f} ({len(valid_scores)} stocks)")
+            
+            # Display percentage changes summary
+            print(f"\nScore Percentage Changes Summary:")
+            print(f"(Shows how much each stock's score has changed compared to historical periods)")
+            for period in historical_periods:
+                period_simple = period.lower().replace('_', '')
+                change_col = f"%change_{period_simple}"
+                if change_col in self.returns_data.columns:
+                    valid_changes = self.returns_data[change_col].dropna()
+                    if len(valid_changes) > 0:
+                        print(f"  vs {period} ago: Mean={valid_changes.mean():.2f}%, Range={valid_changes.min():.2f}% to {valid_changes.max():.2f}% ({len(valid_changes)} stocks)")
+            
+            # Display sign patterns summary
+            print(f"\nSign Pattern Summary:")
+            print(f"(Shows sign patterns: Current, Historical for each period)")
+            for period in historical_periods:
+                period_simple = period.lower().replace('_', '')
+                sign_col = f"symbol_{period_simple}"
+                if sign_col in self.returns_data.columns:
+                    valid_patterns = self.returns_data[sign_col].dropna()
+                    if len(valid_patterns) > 0:
+                        pattern_counts = valid_patterns.value_counts()
+                        print(f"  {period} patterns: {len(valid_patterns)} stocks")
+                        for pattern, count in pattern_counts.items():
+                            print(f"    {pattern}: {count} stocks")
+            
+            # Show sample of stocks with their historical scores, percentage changes, and sign patterns
+            print(f"\nSample Stocks with Historical Scores, Percentage Changes, and Sign Patterns:")
+            sample_data = self.returns_data[self.returns_data['Raw_Score'].notna()].head(5)
+            for _, row in sample_data.iterrows():
+                print(f"  {row['Fincode']} ({row['Symbol']}):")
+                print(f"    Current Score: {row['Raw_Score']:.2f}")
+                for period in historical_periods:
+                    score_col = f"{period}_Raw_Score"
+                    period_simple = period.lower().replace('_', '')
+                    change_col = f"%change_{period_simple}"
+                    sign_col = f"symbol_{period_simple}"
+                    if score_col in self.returns_data.columns and pd.notna(row[score_col]):
+                        # Format the historical score with symbol and %change
+                        symbol_text = f" ({row['Symbol']})" if pd.notna(row.get('Symbol', '')) else ""
+                        change_text = ""
+                        if change_col in self.returns_data.columns and pd.notna(row[change_col]):
+                            change_text = f" {row[change_col]:+.2f}%"
+                        sign_text = ""
+                        if sign_col in self.returns_data.columns and pd.notna(row[sign_col]):
+                            sign_text = f" [{row[sign_col]}]"
+                        print(f"    {period}_raw_score: {row[score_col]:.2f}{symbol_text}{change_text}{sign_text}")
 
 
 def main():
@@ -459,15 +820,19 @@ def main():
             output_credentials=output_credentials
         )
         
-        # Run complete flow
-        result_s3_key = calculator.run_complete_flow(include_scoring=True)
+        # Run complete flow with specific target date
+        target_date = "2025-09-23"  # September 23rd, 2025
+        result_s3_key = calculator.run_complete_flow(target_date=target_date, include_scoring=True)
         
         # Display summary
         calculator.display_summary()
         
-        print(f"\n✅ SUCCESS!")
-        print(f"📁 Results: s3://{OUTPUT_BUCKET}/{result_s3_key}")
-        print(f"📊 Includes: Returns, Turnover, Raw Scores, Normalized Scores")
+        print(f"\nSUCCESS! Production flow completed successfully!")
+        print(f"Results: s3://{OUTPUT_BUCKET}/{result_s3_key}")
+        print(f"Includes: Returns, Turnover, Current Scores, Historical Raw Scores (1 Week, 1 Month, 3 Months, 6 Months, 9 Months, 1 Year ago)")
+        print(f"NEW FEATURES:")
+        print(f"  - Score Percentage Changes (%change_1week, %change_1month, etc.)")
+        print(f"  - Sign Pattern Comparisons (symbol_1week, symbol_1month, etc.)")
         
     except Exception as e:
         logger.error(f"Production flow failed: {str(e)}")

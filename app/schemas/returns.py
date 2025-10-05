@@ -20,7 +20,30 @@ class StockReturnsData(BaseModel):
     returns_3_years: Optional[float] = None
     returns_5_years: Optional[float] = None
     raw_score: Optional[float] = None
-    normalized_score: Optional[float] = None
+    
+    # Historical Raw Scores (from returnsCalsProd.py)
+    raw_score_1_week_ago: Optional[float] = None
+    raw_score_1_month_ago: Optional[float] = None
+    raw_score_3_months_ago: Optional[float] = None
+    raw_score_6_months_ago: Optional[float] = None
+    raw_score_9_months_ago: Optional[float] = None
+    raw_score_1_year_ago: Optional[float] = None
+    
+    # Percentage Changes in Scores
+    score_change_1_week: Optional[float] = None
+    score_change_1_month: Optional[float] = None
+    score_change_3_months: Optional[float] = None
+    score_change_6_months: Optional[float] = None
+    score_change_9_months: Optional[float] = None
+    score_change_1_year: Optional[float] = None
+    
+    # Sign Pattern Comparisons
+    sign_pattern_1_week: Optional[str] = None
+    sign_pattern_1_month: Optional[str] = None
+    sign_pattern_3_months: Optional[str] = None
+    sign_pattern_6_months: Optional[str] = None
+    sign_pattern_9_months: Optional[str] = None
+    sign_pattern_1_year: Optional[str] = None
 
 class StockReturnsResponse(BaseModel):
     """Schema for stock returns data response"""
@@ -35,14 +58,6 @@ class StockReturnsListResponse(BaseModel):
     status: str
     data: List[StockReturnsData]
     total_count: int
-    source_file: str
-    timestamp: str
-
-class StockReturnsSummaryResponse(BaseModel):
-    """Schema for stock returns summary response"""
-    status: str
-    summary: dict
-    total_symbols: int
     source_file: str
     timestamp: str
 
@@ -73,9 +88,3 @@ class ReturnsFileDataResponse(BaseModel):
     last_modified: str
     source: str
     timestamp: str
-
-class StockReturnsErrorResponse(BaseModel):
-    """Schema for stock returns error responses"""
-    status: str
-    message: str
-    symbol: Optional[str] = None
