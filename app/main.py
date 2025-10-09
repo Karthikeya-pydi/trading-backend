@@ -2,14 +2,12 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
-import asyncio
 import sys # Import sys for printing directly to stderr if needed
 
 from app.core.config import settings
 from app.core.database import engine, Base # Ensure Base is imported
 from app.core.middleware import TokenRefreshMiddleware
 from app.api.routes import auth, users, trading, market_data, websocket, iifl, portfolio, returns, stock_analysis
-from app.services.scheduler_service import scheduler_service
 # from app.core.logging import setup_logging  # ← DISABLED FOR VERCEL
 # from app.core.websocket_manager import manager  # DISABLED - No Redis
 # from app.services.realtime_service import realtime_service  # DISABLED - No Redis
@@ -43,28 +41,12 @@ async def lifespan(app: FastAPI):
     # asyncio.create_task(manager.start_redis_listener())  # DISABLED
     # print("DEBUG: WebSocket Redis listener task initiated.", file=sys.stderr)
 
-    # Start scheduler service for automated tasks
-    print("DEBUG: Starting scheduler service...", file=sys.stderr)
-    try:
-        await scheduler_service.start()
-        print("DEBUG: Scheduler service started successfully.", file=sys.stderr)
-    except Exception as e:
-        print(f"ERROR: Failed to start scheduler service: {e}", file=sys.stderr)
-
     print("--- APP STARTUP SEQUENCE COMPLETED ---", file=sys.stderr)
     yield
 
     # Shutdown
     print("--- APP SHUTDOWN SEQUENCE INITIATED ---", file=sys.stderr)
     # await realtime_service.stop()  # DISABLED - No Redis
-    
-    # Stop scheduler service
-    print("DEBUG: Stopping scheduler service...", file=sys.stderr)
-    try:
-        await scheduler_service.stop()
-        print("DEBUG: Scheduler service stopped successfully.", file=sys.stderr)
-    except Exception as e:
-        print(f"ERROR: Failed to stop scheduler service: {e}", file=sys.stderr)
     
     print("--- APP SHUTDOWN SEQUENCE COMPLETED ---", file=sys.stderr)
 
@@ -112,25 +94,3 @@ async def root():
 @app.get("/health")
 async def health_check():
     return {"status": "healthy", "features": ["nifty-indices", "market-data", "trading", "portfolio"], "redis": "disabled"}
-
-@app.post("/api/scheduler/trigger-returns")
-async def trigger_returns_calculation(target_date: str = None):
-    """Manually trigger returns calculation for a specific date"""
-    try:
-        await scheduler_service.run_returns_calculation_manual(target_date)
-        return {"status": "success", "message": f"Returns calculation triggered for {target_date or 'current date'}"}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-@app.get("/api/scheduler/status")
-async def get_scheduler_status():
-    """Get the status of scheduled jobs"""
-    try:
-        jobs = scheduler_service.get_scheduled_jobs()
-        return {
-            "status": "success",
-            "scheduler_running": scheduler_service.is_running,
-            "jobs": jobs
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
