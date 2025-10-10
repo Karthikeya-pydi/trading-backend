@@ -6,6 +6,7 @@ from loguru import logger
 
 from app.models.user import User
 from app.services.iifl_connect import IIFLConnect
+from app.services.stock_returns_service import StockReturnsService
 
 class HoldingsMarketDataService:
     """
@@ -16,6 +17,7 @@ class HoldingsMarketDataService:
         self.user = user
         self.db = db
         self.iifl_client = None
+        self.returns_service = StockReturnsService()
     
     def get_holdings_with_current_prices(self) -> Dict:
         """
@@ -58,8 +60,12 @@ class HoldingsMarketDataService:
                 
                 total_current_value += current_value
                 
+                # Get stock name and raw score
+                stock_name = self._get_stock_name(isin, nse_instrument_id)
+                raw_score = self._get_raw_score(stock_name)
+                
                 holdings_with_prices.append({
-                    "stock_name": self._get_stock_name(isin, nse_instrument_id),
+                    "stock_name": stock_name,
                     "isin": isin,
                     "quantity": quantity,
                     "avg_price": avg_price,
@@ -69,7 +75,8 @@ class HoldingsMarketDataService:
                     "pnl": pnl,
                     "pnl_percent": pnl_percent,
                     "type": "Collateral" if holding.get("IsCollateralHolding", False) else "Regular",
-                    "nse_instrument_id": nse_instrument_id
+                    "nse_instrument_id": nse_instrument_id,
+                    "raw_score": raw_score
                 })
             
             # Calculate total P&L
@@ -211,6 +218,40 @@ class HoldingsMarketDataService:
             
         except Exception as e:
             logger.error(f"Failed to get stock name by instrument ID {nse_instrument_id}: {e}")
+            return None
+    
+    def _get_raw_score(self, stock_name: str) -> float:
+        """
+        Get only the raw score for a stock from returns data.
+        
+        Args:
+            stock_name: Stock name (e.g., "RELIANCE Limited")
+            
+        Returns:
+            Raw score value or None if not found
+        """
+        try:
+            # Extract symbol from stock name (first word is usually the symbol)
+            symbol = stock_name.split()[0] if stock_name else ""
+            
+            if not symbol:
+                return None
+            
+            # Get returns data from service
+            result = self.returns_service.get_stock_returns(symbol)
+            
+            if result.get("status") == "success":
+                data = result.get("data", {})
+                raw_score = data.get("raw_score")
+                
+                if raw_score is not None:
+                    logger.debug(f"Raw score for {symbol}: {raw_score}")
+                    return raw_score
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Failed to get raw score for {stock_name}: {e}")
             return None
     
     def cleanup(self):

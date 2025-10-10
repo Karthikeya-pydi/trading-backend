@@ -188,7 +188,8 @@ async def get_holdings_summary(
                     "type": holding.get("type"),
                     "purchase_date": None,  # Not available in the new service
                     "is_collateral": holding.get("type") == "Collateral",
-                    "nse_instrument_id": holding.get("nse_instrument_id")
+                    "nse_instrument_id": holding.get("nse_instrument_id"),
+                    "raw_score": holding.get("raw_score")  # Raw score (not normalized)
                 }
                 formatted_holdings.append(formatted_holding)
             
