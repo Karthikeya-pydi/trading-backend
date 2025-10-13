@@ -11,7 +11,7 @@ import json
 from app.core.database import get_db
 from app.api.dependencies import get_current_user
 from app.models.user import User
-from app.services.iifl_service_fixed import IIFLServiceFixed
+from app.services.iifl_service import IIFLService
 from app.services.iifl_connect import IIFLConnect
 from app.services.market_analytics_service import MarketAnalyticsService
 from app.schemas.bhavcopy import (
@@ -85,7 +85,7 @@ async def get_market_data(
         )
     
     try:
-        iifl_service = IIFLServiceFixed(db)
+        iifl_service = IIFLService(db)
         client = iifl_service._get_client(current_user.id, "market")
         
         instruments = request.get("instruments", [])
@@ -588,7 +588,7 @@ async def get_last_traded_price(
                 detail="No instruments provided"
             )
         
-        iifl_service = IIFLServiceFixed(db)
+        iifl_service = IIFLService(db)
         ltp_data = iifl_service.get_ltp(db, current_user.id, instruments)
         return ltp_data
         
@@ -637,7 +637,7 @@ async def search_instruments(
     limit = min(max(1, limit or 20), 100)
     
     try:
-        iifl_service = IIFLServiceFixed(db)
+        iifl_service = IIFLService(db)
         client = iifl_service._get_client(current_user.id, "market")
         
         # Try IIFL native search first
@@ -903,7 +903,7 @@ async def get_instrument_master(
         )
     
     try:
-        iifl_service = IIFLServiceFixed(db)
+        iifl_service = IIFLService(db)
         segments = [seg.strip() for seg in exchange_segments.split(",")]
         master_data = iifl_service.get_instrument_master(db, current_user.id, segments)
         

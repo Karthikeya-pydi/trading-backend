@@ -820,8 +820,8 @@ def main():
             output_credentials=output_credentials
         )
         
-        # Run complete flow with specific target date
-        target_date = "2025-09-23"  # September 23rd, 2025
+        # Run complete flow with latest available date from data
+        target_date = None  # Will automatically use the latest date from the data
         result_s3_key = calculator.run_complete_flow(target_date=target_date, include_scoring=True)
         
         # Display summary

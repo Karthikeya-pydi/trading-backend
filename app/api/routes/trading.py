@@ -12,7 +12,7 @@ from app.schemas.trading import (
     StockSearchResponse, BuyStockRequest, BuyStockResponse, StockQuoteResponse,
     EnhancedOrderBookResponse
 )
-from app.services.iifl_service_fixed import IIFLServiceFixed
+from app.services.iifl_service import IIFLService
 from app.services.iifl_connect import IIFLConnect
 
 router = APIRouter()
@@ -92,7 +92,7 @@ async def place_order(
     
     try:
         # Use the fixed IIFL service
-        iifl_service = IIFLServiceFixed(db)
+        iifl_service = IIFLService(db)
         order_result = iifl_service.place_order(db, current_user.id, trade_request)
         
         # Extract order ID from successful response
@@ -168,7 +168,7 @@ async def place_order_advanced(
     
     try:
         # Use the fixed IIFL service with enhanced features
-        iifl_service = IIFLServiceFixed(db)
+        iifl_service = IIFLService(db)
         
         # Place order with enhanced validation and instrument lookup
         order_result = iifl_service.place_order(db, current_user.id, trade_request)
@@ -233,7 +233,7 @@ async def get_positions(
     
     try:
         # Use the fixed IIFL service
-        iifl_service = IIFLServiceFixed(db)
+        iifl_service = IIFLService(db)
         positions_result = iifl_service.get_positions(db, current_user.id)
         
         # Process and return positions
@@ -310,7 +310,7 @@ async def get_order_book(
     
     try:
         # Use the fixed IIFL service
-        iifl_service = IIFLServiceFixed(db)
+        iifl_service = IIFLService(db)
         order_book = iifl_service.get_order_book(db, current_user.id)
         
         # Enhance order book with stock names
@@ -386,7 +386,7 @@ async def cancel_order(
             )
         
         # Use the fixed IIFL service
-        iifl_service = IIFLServiceFixed(db)
+        iifl_service = IIFLService(db)
         cancel_result = iifl_service.cancel_order(db, current_user.id, order_id)
         
         # Update trade status
@@ -429,7 +429,7 @@ async def modify_order(
             )
         
         # Use the fixed IIFL service
-        iifl_service = IIFLServiceFixed(db)
+        iifl_service = IIFLService(db)
         modify_result = iifl_service.modify_order(db, current_user.id, order_id, modification)
         
         # Update trade details
@@ -484,7 +484,7 @@ async def square_off_position(
         )
         
         # Use the fixed IIFL service
-        iifl_service = IIFLServiceFixed(db)
+        iifl_service = IIFLService(db)
         order_result = iifl_service.place_order(db, current_user.id, square_off_request)
         
         return {"status": "success", "message": "Square off order placed successfully"}
@@ -758,7 +758,7 @@ async def buy_stock_simple(
         
         # Step 3: Place order through IIFL Interactive API
         # Use the actual instrument details from search instead of hardcoded fallbacks
-        iifl_service = IIFLServiceFixed(db)
+        iifl_service = IIFLService(db)
         
         # Create a custom trade request with the actual instrument details
         # This bypasses the hardcoded instrument lookup in the IIFL service

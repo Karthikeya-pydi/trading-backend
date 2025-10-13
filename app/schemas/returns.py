@@ -21,7 +21,7 @@ class StockReturnsData(BaseModel):
     returns_5_years: Optional[float] = None
     raw_score: Optional[float] = None
     
-    # Historical Raw Scores (from returnsCalsProd.py)
+    # Historical Raw Scores (from scripts/calculate_returns.py)
     raw_score_1_week_ago: Optional[float] = None
     raw_score_1_month_ago: Optional[float] = None
     raw_score_3_months_ago: Optional[float] = None

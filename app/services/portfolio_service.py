@@ -4,10 +4,12 @@ from typing import Dict, List, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from loguru import logger
+from fastapi import Depends
 
 from app.models.trade import Trade, Position
 from app.models.user import User
 from app.services.iifl_service import IIFLService
+from app.core.database import get_db
 
 class PortfolioService:
     def __init__(self, db: Session):
@@ -222,4 +224,8 @@ class PortfolioService:
             
         except Exception as e:
             logger.error(f"Risk metrics calculation failed for user {user_id}: {e}")
-            raise 
+            raise
+
+def get_portfolio_service(db: Session = Depends(get_db)) -> PortfolioService:
+    """Dependency injection for PortfolioService"""
+    return PortfolioService(db)

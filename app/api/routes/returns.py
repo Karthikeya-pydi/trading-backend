@@ -185,35 +185,6 @@ async def get_returns_file_data(
             detail=f"Failed to fetch returns file data: {str(e)}"
         )
 
-@router.get("/{symbol}", response_model=StockReturnsResponse)
-async def get_stock_returns(
-    symbol: str,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """
-    Get returns data for a specific stock symbol
-    """
-    try:
-        returns_service = StockReturnsService()
-        result = returns_service.get_stock_returns(symbol)
-        
-        if result.get("status") == "success":
-            return result
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=result.get("message", f"No returns data found for symbol: {symbol}")
-            )
-            
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to fetch stock returns for {symbol}: {str(e)}"
-        )
-
 @router.get("/all", response_model=StockReturnsListResponse)
 async def get_all_stock_returns(
     limit: Optional[int] = Query(None, description="Maximum number of records to return"),
@@ -244,4 +215,33 @@ async def get_all_stock_returns(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to fetch all stock returns: {str(e)}"
+        )
+
+@router.get("/{symbol}", response_model=StockReturnsResponse)
+async def get_stock_returns(
+    symbol: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get returns data for a specific stock symbol
+    """
+    try:
+        returns_service = StockReturnsService()
+        result = returns_service.get_stock_returns(symbol)
+        
+        if result.get("status") == "success":
+            return result
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=result.get("message", f"No returns data found for symbol: {symbol}")
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch stock returns for {symbol}: {str(e)}"
         )

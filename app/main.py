@@ -4,9 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import sys # Import sys for printing directly to stderr if needed
 
-from app.core.config import settings
-from app.core.database import engine, Base # Ensure Base is imported
-from app.core.middleware import TokenRefreshMiddleware
+from app.core import settings, engine, Base, TokenRefreshMiddleware
 from app.api.routes import auth, users, trading, market_data, websocket, iifl, portfolio, returns, stock_analysis
 # from app.core.logging import setup_logging  # ← DISABLED FOR VERCEL
 # from app.core.websocket_manager import manager  # DISABLED - No Redis

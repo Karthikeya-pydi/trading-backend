@@ -7,8 +7,8 @@ from loguru import logger
 from app.core.database import get_db
 from app.api.dependencies import get_current_user
 from app.models.user import User
-from app.services.portfolio_service import PortfolioService
-from app.services.iifl_service_fixed import IIFLServiceFixed
+from app.services.portfolio_service import get_portfolio_service, PortfolioService
+from app.services.iifl_service import get_iifl_service, IIFLService
 from app.services.holdings_market_data import HoldingsMarketDataService
 from app.services.stock_returns_service import StockReturnsService
 
@@ -17,10 +17,9 @@ router = APIRouter()
 @router.get("/summary")
 async def get_portfolio_summary(
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    portfolio_service: PortfolioService = Depends(get_portfolio_service)
 ):
     """Get comprehensive portfolio summary"""
-    portfolio_service = PortfolioService(db)
     
     try:
         summary = portfolio_service.get_portfolio_summary(current_user.id)
@@ -36,10 +35,9 @@ async def get_pnl(
     start_date: Optional[datetime] = Query(None, description="Start date for P&L calculation"),
     end_date: Optional[datetime] = Query(None, description="End date for P&L calculation"),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    portfolio_service: PortfolioService = Depends(get_portfolio_service)
 ):
     """Get P&L calculation for specified date range"""
-    portfolio_service = PortfolioService(db)
     
     try:
         pnl_data = portfolio_service.calculate_pnl(current_user.id, start_date, end_date)
@@ -53,7 +51,7 @@ async def get_pnl(
 @router.post("/update-prices")
 async def update_position_prices(
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    portfolio_service: PortfolioService = Depends(get_portfolio_service)
 ):
     """Update current prices for all positions"""
     if not current_user.iifl_market_api_key:
@@ -61,8 +59,6 @@ async def update_position_prices(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="IIFL Market credentials not configured"
         )
-    
-    portfolio_service = PortfolioService(db)
     
     try:
         result = await portfolio_service.update_position_prices(current_user.id)
@@ -76,10 +72,9 @@ async def update_position_prices(
 @router.get("/risk-metrics")
 async def get_risk_metrics(
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    portfolio_service: PortfolioService = Depends(get_portfolio_service)
 ):
     """Get portfolio risk metrics"""
-    portfolio_service = PortfolioService(db)
     
     try:
         risk_metrics = portfolio_service.get_risk_metrics(current_user.id)
@@ -93,10 +88,9 @@ async def get_risk_metrics(
 @router.get("/daily-pnl")
 async def get_daily_pnl(
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    portfolio_service: PortfolioService = Depends(get_portfolio_service)
 ):
     """Get today's P&L"""
-    portfolio_service = PortfolioService(db)
     
     try:
         today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
@@ -118,6 +112,7 @@ async def get_daily_pnl(
 @router.get("/holdings")
 async def get_holdings(
     current_user: User = Depends(get_current_user),
+    iifl_service: IIFLService = Depends(get_iifl_service),
     db: Session = Depends(get_db)
 ):
     """Get user's long-term holdings from IIFL"""
@@ -129,7 +124,6 @@ async def get_holdings(
     
     try:
         # Use the fixed IIFL service
-        iifl_service = IIFLServiceFixed(db)
         holdings_result = iifl_service.get_holdings(db, current_user.id)
         
         return {

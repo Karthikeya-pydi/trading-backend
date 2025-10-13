@@ -3,11 +3,13 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Literal
 from sqlalchemy.orm import Session
 from loguru import logger
+from fastapi import Depends
 
 from app.models.trade import Trade, Position
 from app.models.user import User
 from app.schemas.trading import TradeRequest
 from app.services.iifl_service import IIFLService
+from app.core.database import get_db
 
 class StrategyService:
     def __init__(self, db: Session):
@@ -243,4 +245,8 @@ class StrategyService:
             "FINNIFTY": 26034,
             "MIDCPNIFTY": 26121
         }
-        return instrument_map.get(instrument, 26000) 
+        return instrument_map.get(instrument, 26000)
+
+def get_strategy_service(db: Session = Depends(get_db)) -> StrategyService:
+    """Dependency injection for StrategyService"""
+    return StrategyService(db)

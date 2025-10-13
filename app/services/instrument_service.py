@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import or_, and_, func, text
 
 from app.models.instrument import Instrument
-from app.services.iifl_service_fixed import IIFLServiceFixed
+from app.services.iifl_service import IIFLService
 from app.core.database import get_db
 from typing import Dict, Optional
 from loguru import logger
@@ -20,7 +20,7 @@ class InstrumentService:
 
     def __init__(self, db: Session):
         self.db = db
-        self.iifl_service = IIFLServiceFixed(db)
+        self.iifl_service = IIFLService(db)
 
     def download_and_store_instruments(self, user_id: int, exchange_segments: List[str] = None) -> Dict:
         """Download instruments from IIFL and store in database"""

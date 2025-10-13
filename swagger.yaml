@@ -1,0 +1,1904 @@
+openapi: 3.1.0
+info:
+  title: Trading Platform Backend API
+  description: |
+    A comprehensive trading platform backend with IIFL integration, real-time market data, 
+    portfolio management, and advanced stock analysis features.
+    
+    ## Features
+    - **Google OAuth Authentication** - Secure user authentication
+    - **IIFL Trading Integration** - Place orders, manage positions
+    - **Real-time Market Data** - Live prices, quotes, and market analytics
+    - **Portfolio Management** - Track P&L, holdings, risk metrics
+    - **Stock Analysis** - Advanced analytics and returns calculation
+    - **WebSocket Support** - Real-time updates
+    
+  version: 1.0.0
+  contact:
+    name: Trading Platform Support
+    email: support@tradingplatform.com
+
+servers:
+  - url: http://localhost:8000
+    description: Local development server
+  - url: https://trading-backend-oab.info
+    description: Production server
+
+tags:
+  - name: Health Check
+    description: Service health and status endpoints
+  - name: Authentication
+    description: User authentication and authorization
+  - name: Users
+    description: User profile and credentials management
+  - name: Trading
+    description: Order placement, positions, and trade management
+  - name: Portfolio
+    description: Portfolio summary, P&L, and risk analytics
+  - name: Market Data
+    description: Live market data, quotes, instrument master
+  - name: IIFL Integration
+    description: IIFL API credential management
+  - name: Stock Returns
+    description: Historical returns and performance data
+  - name: Stock Analysis
+    description: Advanced stock analytics and insights
+
+paths:
+  /:
+    get:
+      summary: Root endpoint
+      description: Check if the Trading Platform API is running
+      tags:
+        - Health Check
+      responses:
+        '200':
+          description: API is running
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Welcome to the Trading Platform API"
+
+  /health:
+    get:
+      summary: Health check endpoint
+      description: Check the health status of the API and available features
+      tags:
+        - Health Check
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "healthy"
+                  features:
+                    type: array
+                    items:
+                      type: string
+                    example: ["nifty-indices", "market-data", "trading", "portfolio"]
+                  redis:
+                    type: string
+                    example: "disabled"
+
+  # ========== AUTHENTICATION ENDPOINTS ==========
+  /api/auth/oauth/google/login:
+    get:
+      summary: Initiate Google OAuth login
+      description: Redirects user to Google OAuth consent screen for authentication
+      tags:
+        - Authentication
+      parameters:
+        - name: redirect_uri
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Frontend callback URL
+        - name: state
+          in: query
+          required: false
+          schema:
+            type: string
+          description: State parameter for frontend callback
+      responses:
+        '302':
+          description: Redirect to Google OAuth
+        '200':
+          description: OAuth configuration missing
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                  current_config:
+                    type: object
+
+  /api/auth/oauth/google/callback:
+    get:
+      summary: Google OAuth callback handler
+      description: Handles the OAuth callback from Google and creates/logs in user
+      tags:
+        - Authentication
+      parameters:
+        - name: code
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Authorization code from Google
+        - name: state
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Frontend callback URL
+      responses:
+        '302':
+          description: Redirect to frontend with tokens
+          headers:
+            Location:
+              schema:
+                type: string
+                example: "http://localhost:3000/auth/callback?access_token=xxx&refresh_token=yyy"
+
+  /api/auth/refresh:
+    post:
+      summary: Refresh access token
+      description: Get a new access token using a refresh token
+      tags:
+        - Authentication
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - refresh_token
+              properties:
+                refresh_token:
+                  type: string
+                  description: The refresh token
+                  example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+      responses:
+        '200':
+          description: Token refreshed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access_token:
+                    type: string
+                    example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                  refresh_token:
+                    type: string
+                    example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                  token_type:
+                    type: string
+                    example: "bearer"
+        '400':
+          description: Invalid or expired token
+
+  /api/auth/logout:
+    post:
+      summary: Logout user
+      description: Logout user and clear IIFL sessions
+      tags:
+        - Authentication
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Logged out successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Successfully logged out and IIFL sessions cleared"
+
+  # ========== USER ENDPOINTS ==========
+  /api/users/me:
+    get:
+      summary: Get current user profile
+      description: Get the profile information of the currently authenticated user
+      tags:
+        - Users
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: User profile retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+
+  /api/users/set-iifl-credentials:
+    post:
+      summary: Set IIFL API credentials
+      description: Configure IIFL Market Data and Interactive (Trading) API credentials for the user
+      tags:
+        - Users
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                market_api_key:
+                  type: string
+                  description: IIFL Market Data API Key
+                market_secret_key:
+                  type: string
+                  description: IIFL Market Data Secret Key
+                market_user_id:
+                  type: string
+                  description: IIFL Market Data User ID
+                interactive_api_key:
+                  type: string
+                  description: IIFL Interactive API Key
+                interactive_secret_key:
+                  type: string
+                  description: IIFL Interactive Secret Key
+                interactive_user_id:
+                  type: string
+                  description: IIFL Interactive User ID
+      responses:
+        '200':
+          description: Credentials saved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "IIFL credentials saved successfully"
+
+  # ========== TRADING ENDPOINTS ==========
+  /api/trading/place-order:
+    post:
+      summary: Place a trading order
+      description: |
+        Place a trading order through IIFL Interactive API for:
+        - **Cash Market Orders** - Market, limit, and stop loss orders for equities
+        - **F&O Orders** - Futures and Options (NIFTY, BANKNIFTY, FINNIFTY, etc.)
+        
+        **Example Requests:**
+        
+        **NIFTY Futures Order:**
+        ```json
+        {
+          "underlying_instrument": "NIFTY",
+          "order_type": "BUY",
+          "quantity": 50,
+          "expiry_date": "2024-12-28"
+        }
+        ```
+        
+        **NIFTY Options Order:**
+        ```json
+        {
+          "underlying_instrument": "NIFTY",
+          "option_type": "CALL",
+          "strike_price": 19000,
+          "order_type": "BUY",
+          "quantity": 25,
+          "price": 150.50,
+          "expiry_date": "2024-12-28"
+        }
+        ```
+        
+        **Equity Cash Order:**
+        ```json
+        {
+          "underlying_instrument": "RELIANCE",
+          "order_type": "BUY",
+          "quantity": 100,
+          "price": 2500.00
+        }
+        ```
+      tags:
+        - Trading
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TradeRequest'
+      responses:
+        '200':
+          description: Order placed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TradeResponse'
+        '400':
+          description: Invalid request or IIFL credentials not configured
+        '500':
+          description: Order placement failed
+
+  /api/trading/place-order-advanced:
+    post:
+      summary: Place order with advanced validation
+      description: |
+        Enhanced order placement endpoint with:
+        - Automatic instrument ID lookup for F&O contracts
+        - Detailed validation of order parameters
+        - Better error messages and handling
+        - Support for all IIFL order types
+      tags:
+        - Trading
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TradeRequest'
+      responses:
+        '200':
+          description: Order placed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TradeResponse'
+
+  /api/trading/positions:
+    get:
+      summary: Get all positions
+      description: Retrieve all open positions from IIFL Interactive API
+      tags:
+        - Trading
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Positions retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PositionResponse'
+
+  /api/trading/trades:
+    get:
+      summary: Get trade history
+      description: Get the trade history for the authenticated user
+      tags:
+        - Trading
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Trade history retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Trade'
+
+  /api/trading/order-book:
+    get:
+      summary: Get order book
+      description: Retrieve current order book from IIFL with enhanced formatting
+      tags:
+        - Trading
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Order book retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnhancedOrderBookResponse'
+
+  /api/trading/orders/{order_id}/cancel:
+    put:
+      summary: Cancel an order
+      description: Cancel a pending order by order ID
+      tags:
+        - Trading
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: order_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The order ID to cancel
+      responses:
+        '200':
+          description: Order cancelled successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "success"
+                  message:
+                    type: string
+                    example: "Order cancelled successfully"
+
+  /api/trading/orders/{order_id}/modify:
+    put:
+      summary: Modify an order
+      description: Modify a pending order's price, quantity, or other parameters
+      tags:
+        - Trading
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: order_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The order ID to modify
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TradeRequest'
+      responses:
+        '200':
+          description: Order modified successfully
+
+  /api/trading/positions/{position_id}/square-off:
+    post:
+      summary: Square off a position
+      description: Close/square off an existing position
+      tags:
+        - Trading
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: position_id
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: The position ID to square off
+      responses:
+        '200':
+          description: Position squared off successfully
+
+  /api/trading/search-stocks:
+    get:
+      summary: Search for stocks
+      description: Search for stocks by symbol or name for trading
+      tags:
+        - Trading
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Search query (symbol or company name)
+          example: "RELIANCE"
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 20
+          description: Maximum number of results
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StockSearchResponse'
+
+  /api/trading/buy-stock:
+    post:
+      summary: Buy stock (simplified)
+      description: |
+        Simplified stock buying endpoint with minimal parameters.
+        
+        The system will:
+        1. Search for the stock and get instrument details
+        2. Get current market price
+        3. Place the buy order through IIFL
+        4. Save the trade to database
+        
+        **Example:**
+        ```json
+        {
+          "symbol": "RELIANCE",
+          "quantity": 10,
+          "price": 2500.00
+        }
+        ```
+      tags:
+        - Trading
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BuyStockRequest'
+      responses:
+        '200':
+          description: Stock purchased successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BuyStockResponse'
+
+  /api/trading/exchange-status:
+    get:
+      summary: Get exchange status
+      description: Check if stock exchanges are currently open for trading
+      tags:
+        - Trading
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Exchange status retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  nse_open:
+                    type: boolean
+                  bse_open:
+                    type: boolean
+                  current_time:
+                    type: string
+
+  /api/trading/stock-quote/{stock_symbol}:
+    get:
+      summary: Get real-time stock quote
+      description: Get live quote with price, volume, and market data for a stock
+      tags:
+        - Trading
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: stock_symbol
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Stock symbol (e.g., RELIANCE, TCS)
+          example: "RELIANCE"
+      responses:
+        '200':
+          description: Stock quote retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StockQuoteResponse'
+
+  # ========== PORTFOLIO ENDPOINTS ==========
+  /api/portfolio/summary:
+    get:
+      summary: Get portfolio summary
+      description: Get comprehensive portfolio summary with positions, P&L, and performance metrics
+      tags:
+        - Portfolio
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Portfolio summary retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortfolioSummary'
+
+  /api/portfolio/pnl:
+    get:
+      summary: Get P&L calculation
+      description: Calculate profit and loss for a specified date range
+      tags:
+        - Portfolio
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: start_date
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+          description: Start date for P&L calculation
+        - name: end_date
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+          description: End date for P&L calculation
+      responses:
+        '200':
+          description: P&L calculated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PnLData'
+
+  /api/portfolio/update-prices:
+    post:
+      summary: Update position prices
+      description: Update current market prices for all positions in the portfolio
+      tags:
+        - Portfolio
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Prices updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  updated_count:
+                    type: integer
+                  message:
+                    type: string
+
+  /api/portfolio/risk-metrics:
+    get:
+      summary: Get portfolio risk metrics
+      description: Calculate risk metrics including exposure, concentration risk, and portfolio diversity
+      tags:
+        - Portfolio
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Risk metrics calculated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RiskMetrics'
+
+  /api/portfolio/daily-pnl:
+    get:
+      summary: Get today's P&L
+      description: Get profit and loss for the current trading day
+      tags:
+        - Portfolio
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Daily P&L retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  date:
+                    type: string
+                    format: date
+                  daily_pnl:
+                    type: number
+                  realized_pnl:
+                    type: number
+                  unrealized_pnl:
+                    type: number
+
+  /api/portfolio/holdings:
+    get:
+      summary: Get long-term holdings
+      description: Retrieve user's long-term stock holdings from IIFL
+      tags:
+        - Portfolio
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Holdings retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  holdings:
+                    type: object
+                  message:
+                    type: string
+
+  /api/portfolio/holdings-summary:
+    get:
+      summary: Get holdings summary with live prices
+      description: Get user-friendly holdings summary from IIFL with current market prices
+      tags:
+        - Portfolio
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Holdings summary retrieved successfully
+
+  # ========== MARKET DATA ENDPOINTS ==========
+  /api/market/:
+    get:
+      summary: Market Data API information
+      description: Get information about available market data endpoints
+      tags:
+        - Market Data
+      responses:
+        '200':
+          description: Market data info
+
+  /api/market/market-data:
+    post:
+      summary: Get market data for instruments
+      description: Fetch market data for multiple instruments
+      tags:
+        - Market Data
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - instruments
+              properties:
+                instruments:
+                  type: array
+                  items:
+                    type: string
+                  description: List of instrument symbols
+                  example: ["NIFTY", "BANKNIFTY", "RELIANCE"]
+      responses:
+        '200':
+          description: Market data retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /api/market/stock-data:
+    post:
+      summary: Get detailed stock data
+      description: Get detailed market data for specific stocks
+      tags:
+        - Market Data
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                symbols:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: Stock data retrieved successfully
+
+  /api/market/stock/{stock_name}:
+    get:
+      summary: Get stock information
+      description: Get detailed information for a specific stock
+      tags:
+        - Market Data
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: stock_name
+          in: path
+          required: true
+          schema:
+            type: string
+          example: "RELIANCE"
+      responses:
+        '200':
+          description: Stock information retrieved
+
+  /api/market/ltp:
+    post:
+      summary: Get Last Traded Price
+      description: Get the last traded price for multiple instruments
+      tags:
+        - Market Data
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                instruments:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      exchangeSegment:
+                        type: integer
+                      exchangeInstrumentID:
+                        type: integer
+      responses:
+        '200':
+          description: LTP data retrieved successfully
+
+  /api/market/instruments/search:
+    get:
+      summary: Search instruments
+      description: Search for instruments by symbol or name across exchanges
+      tags:
+        - Market Data
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Search query
+          example: "NIFTY"
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /api/market/instruments/master:
+    get:
+      summary: Get instrument master data
+      description: |
+        Download complete instrument master data from IIFL for specified exchanges.
+        
+        **Supported Exchanges:**
+        - NSECM - NSE Cash Market
+        - NSEFO - NSE Futures & Options
+        - NSECD - NSE Currency Derivatives
+        - NSECO - NSE Currency Options
+        - BSECM - BSE Cash Market
+        - BSEFO - BSE Futures & Options
+        - BSECD - BSE Currency Derivatives
+      tags:
+        - Market Data
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: exchange_segments
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Comma-separated exchange segments
+          example: "NSECM,NSEFO"
+        - name: full_data
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+          description: Return full instrument data
+        - name: include_sample
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+          description: Include sample data in response
+      responses:
+        '200':
+          description: Instrument master data retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total_instruments:
+                    type: integer
+                  instruments:
+                    type: array
+                    items:
+                      type: object
+
+  /api/market/bhavcopy/files:
+    get:
+      summary: List available Bhavcopy files
+      description: Get list of available Bhavcopy (daily price) files from S3
+      tags:
+        - Market Data
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Bhavcopy files list retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BhavcopyFilesListResponse'
+
+  /api/market/bhavcopy/file/{filename}:
+    get:
+      summary: Get Bhavcopy file data
+      description: Download and parse a specific Bhavcopy file
+      tags:
+        - Market Data
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: filename
+          in: path
+          required: true
+          schema:
+            type: string
+          example: "bhavcopy-2024-01-15.csv"
+      responses:
+        '200':
+          description: Bhavcopy data retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BhavcopyFileDataResponse'
+
+  /api/market/bhavcopy:
+    get:
+      summary: Get latest Bhavcopy data
+      description: Get the most recent Bhavcopy data
+      tags:
+        - Market Data
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Latest Bhavcopy data
+
+  /api/market/nifty/indices:
+    get:
+      summary: Get NIFTY indices list
+      description: Get list of all available NIFTY indices (NIFTY 50, NIFTY 100, etc.)
+      tags:
+        - Market Data
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: NIFTY indices list retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  indices:
+                    type: array
+                    items:
+                      type: string
+                    example: ["Nifty 50", "Nifty Next 50", "Nifty 100", "Nifty 500"]
+
+  /api/market/nifty/{index_name}:
+    get:
+      summary: Get NIFTY index data
+      description: Get constituent stocks and data for a specific NIFTY index
+      tags:
+        - Market Data
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: index_name
+          in: path
+          required: true
+          schema:
+            type: string
+          example: "Nifty 50"
+      responses:
+        '200':
+          description: NIFTY index data retrieved
+
+  /api/market/nifty/{index_name}/constituents:
+    get:
+      summary: Get NIFTY index constituents
+      description: Get list of stocks that make up a specific NIFTY index
+      tags:
+        - Market Data
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: index_name
+          in: path
+          required: true
+          schema:
+            type: string
+          example: "Nifty 50"
+      responses:
+        '200':
+          description: Index constituents retrieved
+
+  /api/market/s3/test:
+    get:
+      summary: Test S3 connection
+      description: Test AWS S3 connectivity and credentials
+      tags:
+        - Market Data
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: S3 connection successful
+
+  # ========== IIFL INTEGRATION ENDPOINTS ==========
+  /api/iifl/credentials/market:
+    post:
+      summary: Set IIFL Market Data credentials
+      description: Configure IIFL Market Data API credentials
+      tags:
+        - IIFL Integration
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - api_key
+                - secret_key
+                - user_id
+              properties:
+                api_key:
+                  type: string
+                secret_key:
+                  type: string
+                user_id:
+                  type: string
+      responses:
+        '200':
+          description: Credentials saved successfully
+
+  /api/iifl/credentials/interactive:
+    post:
+      summary: Set IIFL Interactive credentials
+      description: Configure IIFL Interactive (Trading) API credentials
+      tags:
+        - IIFL Integration
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - api_key
+                - secret_key
+                - user_id
+              properties:
+                api_key:
+                  type: string
+                secret_key:
+                  type: string
+                user_id:
+                  type: string
+      responses:
+        '200':
+          description: Credentials saved successfully
+
+  /api/iifl/credentials/validate:
+    post:
+      summary: Validate IIFL credentials
+      description: Test and validate IIFL API credentials before saving
+      tags:
+        - IIFL Integration
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                market_api_key:
+                  type: string
+                market_secret_key:
+                  type: string
+                interactive_api_key:
+                  type: string
+                interactive_secret_key:
+                  type: string
+      responses:
+        '200':
+          description: Validation results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  market_valid:
+                    type: boolean
+                  interactive_valid:
+                    type: boolean
+                  market_error:
+                    type: string
+                    nullable: true
+                  interactive_error:
+                    type: string
+                    nullable: true
+
+  /api/iifl/balance:
+    get:
+      summary: Get account balance
+      description: Get account balance and margin details from IIFL
+      tags:
+        - IIFL Integration
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Balance retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+
+  # ========== STOCK RETURNS ENDPOINTS ==========
+  /api/returns/files:
+    get:
+      summary: List stock returns files
+      description: Get list of available stock returns data files from S3
+      tags:
+        - Stock Returns
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Files list retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReturnsFilesListResponse'
+
+  /api/returns/file/{filename}:
+    get:
+      summary: Get returns file data
+      description: Download and parse a specific returns data file
+      tags:
+        - Stock Returns
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: filename
+          in: path
+          required: true
+          schema:
+            type: string
+          example: "adjusted-eq-data-2024-01-15.csv"
+      responses:
+        '200':
+          description: Returns file data retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReturnsFileDataResponse'
+
+  /api/returns/all:
+    get:
+      summary: Get all stock returns
+      description: Get returns data for all stocks from the latest file
+      tags:
+        - Stock Returns
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: All stock returns retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StockReturnsListResponse'
+
+  /api/returns/{symbol}:
+    get:
+      summary: Get stock returns by symbol
+      description: Get historical returns and scores for a specific stock
+      tags:
+        - Stock Returns
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: symbol
+          in: path
+          required: true
+          schema:
+            type: string
+          example: "RELIANCE"
+      responses:
+        '200':
+          description: Stock returns retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StockReturnsResponse'
+
+  # ========== STOCK ANALYSIS ENDPOINTS ==========
+  /api/stock-analysis/search:
+    get:
+      summary: Analyze single stock
+      description: Get comprehensive analysis for a single stock with metrics and flags
+      tags:
+        - Stock Analysis
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: symbol
+          in: query
+          required: true
+          schema:
+            type: string
+          example: "RELIANCE"
+        - name: force_refresh
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+          description: Force refresh data from S3
+      responses:
+        '200':
+          description: Stock analysis retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SingleStockAnalysisResponse'
+
+  /api/stock-analysis/stocks:
+    get:
+      summary: Get all analyzed stocks
+      description: Get list of all stocks available for analysis
+      tags:
+        - Stock Analysis
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Stocks list retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total_stocks:
+                    type: integer
+                  stocks:
+                    type: array
+                    items:
+                      type: string
+
+  /api/stock-analysis/clear-cache:
+    post:
+      summary: Clear analysis cache
+      description: Clear cached analysis data to force fresh data load
+      tags:
+        - Stock Analysis
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Cache cleared successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Cache cleared successfully"
+
+# ========== COMPONENTS ==========
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        JWT token obtained from Google OAuth login.
+        
+        **How to authenticate:**
+        1. Login via `/api/auth/oauth/google/login`
+        2. Complete OAuth flow
+        3. Receive `access_token` and `refresh_token`
+        4. Use `access_token` in Authorization header: `Bearer {token}`
+        5. Refresh token when expired using `/api/auth/refresh`
+
+  schemas:
+    # ========== AUTH SCHEMAS ==========
+    User:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        email:
+          type: string
+          format: email
+          example: "user@example.com"
+        name:
+          type: string
+          example: "John Doe"
+        google_id:
+          type: string
+        profile_picture:
+          type: string
+          format: uri
+        is_active:
+          type: boolean
+        has_iifl_market_credentials:
+          type: boolean
+        has_iifl_interactive_credentials:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    # ========== TRADING SCHEMAS ==========
+    TradeRequest:
+      type: object
+      required:
+        - underlying_instrument
+        - order_type
+        - quantity
+      properties:
+        underlying_instrument:
+          type: string
+          description: Symbol (NIFTY, BANKNIFTY, RELIANCE, etc.)
+          example: "NIFTY"
+        option_type:
+          type: string
+          enum: [CALL, PUT]
+          nullable: true
+          description: Option type (for options trading)
+        strike_price:
+          type: number
+          nullable: true
+          description: Strike price (for options)
+          example: 19000
+        expiry_date:
+          type: string
+          format: date
+          nullable: true
+          description: Expiry date (for F&O)
+          example: "2024-12-28"
+        order_type:
+          type: string
+          enum: [BUY, SELL]
+          description: Buy or Sell
+          example: "BUY"
+        quantity:
+          type: integer
+          minimum: 1
+          description: Number of units/lots
+          example: 50
+        price:
+          type: number
+          nullable: true
+          description: Limit price (null for market orders)
+          example: 19500.50
+        stop_loss_price:
+          type: number
+          nullable: true
+          description: Stop loss trigger price
+
+    TradeResponse:
+      type: object
+      properties:
+        id:
+          type: integer
+        order_id:
+          type: string
+        status:
+          type: string
+          example: "success"
+        message:
+          type: string
+          example: "Order placed successfully"
+
+    PositionResponse:
+      type: object
+      properties:
+        id:
+          type: integer
+        underlying_instrument:
+          type: string
+        option_type:
+          type: string
+          nullable: true
+        strike_price:
+          type: number
+          nullable: true
+        expiry_date:
+          type: string
+          format: date
+          nullable: true
+        quantity:
+          type: integer
+        average_price:
+          type: number
+        current_price:
+          type: number
+          nullable: true
+        unrealized_pnl:
+          type: number
+        stop_loss_price:
+          type: number
+          nullable: true
+        stop_loss_active:
+          type: boolean
+
+    Trade:
+      type: object
+      properties:
+        id:
+          type: integer
+        order_id:
+          type: string
+        underlying_instrument:
+          type: string
+        order_type:
+          type: string
+        quantity:
+          type: integer
+        price:
+          type: number
+        order_status:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    BuyStockRequest:
+      type: object
+      required:
+        - symbol
+        - quantity
+      properties:
+        symbol:
+          type: string
+          description: Stock symbol
+          example: "RELIANCE"
+        quantity:
+          type: integer
+          minimum: 1
+          description: Number of shares
+          example: 10
+        price:
+          type: number
+          nullable: true
+          description: Limit price (omit for market order)
+          example: 2500.00
+
+    BuyStockResponse:
+      type: object
+      properties:
+        order_id:
+          type: string
+        symbol:
+          type: string
+        quantity:
+          type: integer
+        status:
+          type: string
+        message:
+          type: string
+
+    StockSearchResponse:
+      type: object
+      properties:
+        total:
+          type: integer
+        results:
+          type: array
+          items:
+            type: object
+            properties:
+              symbol:
+                type: string
+              name:
+                type: string
+              exchange:
+                type: string
+              instrument_id:
+                type: integer
+
+    StockQuoteResponse:
+      type: object
+      properties:
+        symbol:
+          type: string
+        ltp:
+          type: number
+          description: Last traded price
+        open:
+          type: number
+        high:
+          type: number
+        low:
+          type: number
+        close:
+          type: number
+        volume:
+          type: integer
+        change:
+          type: number
+        change_percent:
+          type: number
+
+    EnhancedOrderBookResponse:
+      type: object
+      properties:
+        total_orders:
+          type: integer
+        pending_orders:
+          type: integer
+        completed_orders:
+          type: integer
+        cancelled_orders:
+          type: integer
+        orders:
+          type: array
+          items:
+            type: object
+
+    # ========== PORTFOLIO SCHEMAS ==========
+    PortfolioSummary:
+      type: object
+      properties:
+        total_positions:
+          type: integer
+        long_positions:
+          type: integer
+        short_positions:
+          type: integer
+        total_investment:
+          type: number
+        current_value:
+          type: number
+        unrealized_pnl:
+          type: number
+        daily_pnl:
+          type: number
+        monthly_pnl:
+          type: number
+        positions:
+          type: array
+          items:
+            type: object
+
+    PnLData:
+      type: object
+      properties:
+        total_realized_pnl:
+          type: number
+        total_unrealized_pnl:
+          type: number
+        total_pnl:
+          type: number
+        total_trades:
+          type: integer
+        winning_trades:
+          type: integer
+        losing_trades:
+          type: integer
+        win_rate:
+          type: number
+        total_charges:
+          type: number
+
+    RiskMetrics:
+      type: object
+      properties:
+        net_exposure:
+          type: number
+        gross_exposure:
+          type: number
+        long_exposure:
+          type: number
+        short_exposure:
+          type: number
+        concentration_risk_percent:
+          type: number
+        positions_at_risk:
+          type: integer
+        total_unrealized_loss:
+          type: number
+        portfolio_diversity:
+          type: integer
+
+    # ========== RETURNS SCHEMAS ==========
+    StockReturnsData:
+      type: object
+      properties:
+        symbol:
+          type: string
+        fincode:
+          type: string
+        isin:
+          type: string
+        latest_date:
+          type: string
+          format: date-time
+        latest_close:
+          type: number
+        latest_volume:
+          type: integer
+        turnover:
+          type: number
+          nullable: true
+        returns_1_week:
+          type: number
+          nullable: true
+        returns_1_month:
+          type: number
+          nullable: true
+        returns_3_months:
+          type: number
+          nullable: true
+        returns_6_months:
+          type: number
+          nullable: true
+        returns_9_months:
+          type: number
+          nullable: true
+        returns_1_year:
+          type: number
+          nullable: true
+        returns_3_years:
+          type: number
+          nullable: true
+        returns_5_years:
+          type: number
+          nullable: true
+        raw_score:
+          type: number
+          nullable: true
+          description: Composite performance score
+
+    StockReturnsResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        symbol:
+          type: string
+        data:
+          $ref: '#/components/schemas/StockReturnsData'
+        source_file:
+          type: string
+        timestamp:
+          type: string
+
+    StockReturnsListResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/StockReturnsData'
+        total_count:
+          type: integer
+        source_file:
+          type: string
+        timestamp:
+          type: string
+
+    ReturnsFilesListResponse:
+      type: object
+      properties:
+        message:
+          type: string
+        files:
+          type: array
+          items:
+            type: object
+            properties:
+              filename:
+                type: string
+              s3_key:
+                type: string
+              size_mb:
+                type: number
+              last_modified:
+                type: string
+              source:
+                type: string
+        total_files:
+          type: integer
+        source:
+          type: string
+        timestamp:
+          type: string
+
+    ReturnsFileDataResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        message:
+          type: string
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/StockReturnsData'
+        total_count:
+          type: integer
+        source_file:
+          type: string
+        file_size_mb:
+          type: number
+        last_modified:
+          type: string
+        source:
+          type: string
+        timestamp:
+          type: string
+
+    # ========== BHAVCOPY SCHEMAS ==========
+    BhavcopyFilesListResponse:
+      type: object
+      properties:
+        message:
+          type: string
+        files:
+          type: array
+          items:
+            type: object
+        total_files:
+          type: integer
+        source:
+          type: string
+        timestamp:
+          type: string
+
+    BhavcopyFileDataResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        message:
+          type: string
+        data:
+          type: array
+          items:
+            type: object
+        total_count:
+          type: integer
+
+    # ========== STOCK ANALYSIS SCHEMAS ==========
+    SingleStockAnalysisResponse:
+      type: object
+      properties:
+        symbol:
+          type: string
+        data_points:
+          type: integer
+        analysis_date:
+          type: string
+        descriptive_stats:
+          type: object
+          properties:
+            n_days:
+              type: integer
+            pct_missing:
+              type: number
+            start_date:
+              type: string
+              format: date-time
+            end_date:
+              type: string
+              format: date-time
+            mean_return:
+              type: number
+            std_return:
+              type: number
+            skew_return:
+              type: number
+            kurtosis_return:
+              type: number
+            min_return:
+              type: number
+            max_return:
+              type: number
+            illiquid_flag:
+              type: boolean
+        global_analysis:
+          type: object
+          properties:
+            global_median:
+              type: number
+            global_mad:
+              type: number
+            global_outlier_count:
+              type: integer
+        rolling_analysis:
+          type: object
+          properties:
+            window_ready_10:
+              type: integer
+            window_ready_40:
+              type: integer
+            window_ready_120:
+              type: integer
+            mild_anomaly_count:
+              type: integer
+            major_anomaly_count:
+              type: integer
+        per_stock_analysis:
+          type: object
+          properties:
+            per_stock_median:
+              type: number
+            per_stock_mad:
+              type: number
+            robust_outlier_count:
+              type: integer
+            very_extreme_count:
+              type: integer
+        detailed_data:
+          type: array
+          items:
+            type: object
+
+# ========== SECURITY ==========
+security:
+  - BearerAuth: []
+
