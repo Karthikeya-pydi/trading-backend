@@ -716,7 +716,7 @@ class ProductionReturnsCalculator:
                 target_date = self.returns_data['Latest_Date'].max().strftime('%Y-%m-%d')
             
             # Create S3 key
-            s3_key = f"{self.output_prefix}/adjusted-eq-data-{target_date}.csv"
+            s3_key = f"{self.output_prefix}/returns-{target_date}.csv"
             
             # Convert DataFrame to CSV string and upload
             csv_data = self.returns_data.to_csv(index=False)
