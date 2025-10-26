@@ -55,6 +55,11 @@ class ProductionReturnsCalculator:
         self.data = None
         self.returns_data = None
         
+        # Define exclusion patterns
+        self.exclusion_patterns = [
+            "ETF", "BEES", "NIFTY", "GOLD", "GLD", "SILVER", "SILV"
+        ]
+        
         # Initialize S3 clients
         self._init_s3_clients(input_credentials, output_credentials)
         
@@ -90,6 +95,17 @@ class ProductionReturnsCalculator:
             logger.error(f"S3 connection failed: {str(e)}")
             raise
     
+    def _should_exclude_symbol(self, symbol: str) -> bool:
+        """Check if a symbol should be excluded based on exclusion patterns"""
+        if pd.isna(symbol) or symbol == '':
+            return True
+        
+        symbol_upper = str(symbol).upper()
+        for pattern in self.exclusion_patterns:
+            if pattern.upper() in symbol_upper:
+                return True
+        return False
+    
     def download_and_convert_data(self) -> pd.DataFrame:
         """Download H5 data from S3 and convert to DataFrame"""
         try:
@@ -103,6 +119,12 @@ class ProductionReturnsCalculator:
             # Convert H5 to DataFrame
             self.data = self._convert_h5_to_dataframe(h5_data)
             logger.info(f"Converted to DataFrame: {self.data.shape}")
+            
+            # Apply exclusion filter
+            original_count = len(self.data)
+            self.data = self._apply_exclusion_filter(self.data)
+            excluded_count = original_count - len(self.data)
+            logger.info(f"Applied exclusion filter: {excluded_count} symbols excluded, {len(self.data)} remaining")
             
             return self.data
             
@@ -159,6 +181,43 @@ class ProductionReturnsCalculator:
         
         finally:
             os.unlink(temp_file_path)
+    
+    def _apply_exclusion_filter(self, data: pd.DataFrame) -> pd.DataFrame:
+        """Apply exclusion filter to remove unwanted symbols"""
+        try:
+            logger.info("Applying exclusion filter...")
+            
+            # Log exclusion patterns
+            logger.info(f"Exclusion patterns: {self.exclusion_patterns}")
+            
+            # Get unique symbols before filtering
+            original_symbols = data['Symbol'].unique() if 'Symbol' in data.columns else []
+            logger.info(f"Original symbols count: {len(original_symbols)}")
+            
+            # Apply exclusion filter
+            if 'Symbol' in data.columns:
+                # Create exclusion mask
+                exclusion_mask = data['Symbol'].apply(self._should_exclude_symbol)
+                
+                # Log excluded symbols
+                excluded_symbols = data[exclusion_mask]['Symbol'].unique()
+                if len(excluded_symbols) > 0:
+                    logger.info(f"Excluded symbols: {excluded_symbols[:10]}{'...' if len(excluded_symbols) > 10 else ''}")
+                
+                # Filter data
+                filtered_data = data[~exclusion_mask]
+                
+                logger.info(f"Exclusion filter applied: {len(data)} -> {len(filtered_data)} records")
+                logger.info(f"Symbols excluded: {len(excluded_symbols)}")
+                
+                return filtered_data
+            else:
+                logger.warning("No 'Symbol' column found, skipping exclusion filter")
+                return data
+                
+        except Exception as e:
+            logger.error(f"Exclusion filter failed: {str(e)}")
+            return data
     
     def calculate_returns(self, target_date: Optional[str] = None) -> pd.DataFrame:
         """Calculate returns for all symbols"""
@@ -712,6 +771,7 @@ class ProductionReturnsCalculator:
         
         print(f"Total fincodes processed: {len(self.returns_data)}")
         print(f"Latest data date: {self.returns_data['Latest_Date'].max()}")
+        print(f"Exclusion patterns applied: {self.exclusion_patterns}")
         
         # Display scoring summary if available
         if 'Raw_Score' in self.returns_data.columns:
@@ -830,6 +890,8 @@ def main():
         print(f"\nSUCCESS! Production flow completed successfully!")
         print(f"Results: s3://{OUTPUT_BUCKET}/{result_s3_key}")
         print(f"Includes: Returns, Turnover, Current Scores, Historical Raw Scores (1 Week, 1 Month, 3 Months, 6 Months, 9 Months, 1 Year ago)")
+        print(f"EXCLUSIONS APPLIED:")
+        print(f"  - Symbols containing: ETF, BEES, NIFTY, GOLD/GLD, SILVER/SILV")
         print(f"NEW FEATURES:")
         print(f"  - Score Percentage Changes (%change_1week, %change_1month, etc.)")
         print(f"  - Sign Pattern Comparisons (symbol_1week, symbol_1month, etc.)")
