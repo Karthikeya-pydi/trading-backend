@@ -16,6 +16,11 @@ def encrypt_data(data: str) -> str:
 
 def decrypt_data(encrypted_data: str) -> str:
     """Decrypt sensitive data"""
-    f = Fernet(get_encryption_key())
-    decrypted_data = f.decrypt(encrypted_data.encode())
-    return decrypted_data.decode()
+    if encrypted_data is None:
+        raise ValueError("Cannot decrypt None value. Credentials not set.")
+    try:
+        f = Fernet(get_encryption_key())
+        decrypted_data = f.decrypt(encrypted_data.encode())
+        return decrypted_data.decode()
+    except Exception as e:
+        raise ValueError(f"Failed to decrypt credentials: {str(e)}")

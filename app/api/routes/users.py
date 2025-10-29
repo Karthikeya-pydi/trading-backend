@@ -48,6 +48,7 @@ async def set_iifl_credentials(
             message = "IIFL Interactive credentials saved successfully"
         
         db.commit()
+        db.refresh(current_user)
         
         return {
             "message": message,

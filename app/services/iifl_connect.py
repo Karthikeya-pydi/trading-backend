@@ -25,6 +25,7 @@
 import configparser
 import json
 import logging
+import struct
 import requests
 from urllib import parse
 from typing import Optional, Dict, Any, List
@@ -220,10 +221,14 @@ class IIFLConnect(IIFLCommon):
         
         # Get appropriate credentials based on API type
         if api_type == "interactive":
+            if not user.iifl_interactive_api_key or not user.iifl_interactive_secret_key:
+                raise ValueError("IIFL Interactive credentials not found. Please set your API key and secret key.")
             self.apiKey = decrypt_data(user.iifl_interactive_api_key)
             self.secretKey = decrypt_data(user.iifl_interactive_secret_key)
             self.userID = user.iifl_interactive_user_id
         else:  # market
+            if not user.iifl_market_api_key or not user.iifl_market_secret_key:
+                raise ValueError("IIFL Market credentials not found. Please set your API key and secret key.")
             self.apiKey = decrypt_data(user.iifl_market_api_key)
             self.secretKey = decrypt_data(user.iifl_market_secret_key)
             self.userID = user.iifl_market_user_id

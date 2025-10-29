@@ -601,6 +601,10 @@ class IIFLService:
         # Clear cached clients for this user
         self.logout_user(user.id, "both")
         
+        # Commit changes to database
+        self.db.commit()
+        self.db.refresh(user)
+        
         return user
 
     def get_instrument_master(self, db: Session, user_id: int, exchange_segments: List[str] = None) -> Dict:
