@@ -12,7 +12,7 @@ tail -30 scripts/scheduler_cron.log
 
 ## Schedule
 
-- **Runs at**: 9:35 PM daily (server time)
+- **Runs at**: 10:00 PM IST daily
 - **Status**: Installed ✓
 
 ## Test now

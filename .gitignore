@@ -170,3 +170,4 @@ data/
 *.h5
 uploads/
 trading-platform-key.pem
+screener_output/

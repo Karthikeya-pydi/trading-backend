@@ -1,5 +1,5 @@
 """
-Scheduler for running returnsCalsProd.py at 9:35 PM daily
+Scheduler for running returnsCalsProd.py at 10:00 PM IST daily
 Can be used with cron on Linux or Task Scheduler on Windows
 """
 
