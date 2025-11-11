@@ -322,8 +322,8 @@ async def get_stock_data_by_name(
                 analytics_service = MarketAnalyticsService(current_user, db)
                 analytics_data = await anyio.to_thread.run_sync(
                     analytics_service.get_stock_analytics,
-                    symbol=stock_info.get("Name"),
-                    current_price=float(current_price)
+                    stock_info.get("Name"),
+                    float(current_price)
                 )
             except Exception as e:
                 logger.error(f"Error calculating analytics for {stock_name}: {e}")
@@ -529,8 +529,8 @@ async def get_stock_data_by_name_get(
                 analytics_service = MarketAnalyticsService(current_user, db)
                 analytics_data = await anyio.to_thread.run_sync(
                     analytics_service.get_stock_analytics,
-                    symbol=stock_info.get("Name"),
-                    current_price=float(current_price)
+                    stock_info.get("Name"),
+                    float(current_price)
                 )
             except Exception as e:
                 logger.error(f"Error calculating analytics for {stock_name}: {e}")
@@ -734,8 +734,8 @@ async def search_instruments(
                     if current_price:
                         analytics_data = await anyio.to_thread.run_sync(
                             analytics_service.get_stock_analytics,
-                            symbol=instrument.get("Name"),
-                            current_price=float(current_price)
+                            instrument.get("Name"),
+                            float(current_price)
                         )
                     
                     # Add analytics to instrument data
@@ -863,8 +863,8 @@ async def search_instruments(
                 if current_price:
                     analytics_data = await anyio.to_thread.run_sync(
                         analytics_service.get_stock_analytics,
-                        symbol=instrument.get("Name"),
-                        current_price=float(current_price)
+                        instrument.get("Name"),
+                        float(current_price)
                     )
                 
                 # Add analytics to instrument data
