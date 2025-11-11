@@ -1,7 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List, Dict, Optional
+import anyio
 from datetime import datetime
+from loguru import logger
+import anyio
 
 from app.core.database import get_db
 from app.api.dependencies import get_current_user
@@ -93,7 +96,9 @@ async def place_order(
     try:
         # Use the fixed IIFL service
         iifl_service = IIFLService(db)
-        order_result = iifl_service.place_order(db, current_user.id, trade_request)
+        order_result = await iifl_service.place_order(db, current_user.id, trade_request)
+        iifl_service = IIFLService(db)
+        order_result = await iifl_service.place_order(db, current_user.id, trade_request)
         
         # Extract order ID from successful response
         order_id = order_result.get("result", {}).get("AppOrderID")
@@ -171,7 +176,7 @@ async def place_order_advanced(
         iifl_service = IIFLService(db)
         
         # Place order with enhanced validation and instrument lookup
-        order_result = iifl_service.place_order(db, current_user.id, trade_request)
+        order_result = await iifl_service.place_order(db, current_user.id, trade_request)
         
         # Extract order details
         result_data = order_result.get("result", {})
@@ -234,7 +239,7 @@ async def get_positions(
     try:
         # Use the fixed IIFL service
         iifl_service = IIFLService(db)
-        positions_result = iifl_service.get_positions(db, current_user.id)
+        positions_result = await iifl_service.get_positions(db, current_user.id)
         
         # Process and return positions
         # Handle both dict and string responses gracefully
@@ -311,7 +316,7 @@ async def get_order_book(
     try:
         # Use the fixed IIFL service
         iifl_service = IIFLService(db)
-        order_book = iifl_service.get_order_book(db, current_user.id)
+        order_book = await iifl_service.get_order_book(db, current_user.id)
         
         # Enhance order book with stock names
         if order_book.get("type") == "success" and order_book.get("result"):
@@ -387,7 +392,7 @@ async def cancel_order(
         
         # Use the fixed IIFL service
         iifl_service = IIFLService(db)
-        cancel_result = iifl_service.cancel_order(db, current_user.id, order_id)
+        cancel_result = await iifl_service.cancel_order(db, current_user.id, order_id)
         
         # Update trade status
         trade.order_status = "CANCELLED"
@@ -395,6 +400,8 @@ async def cancel_order(
         
         return {"status": "success", "message": "Order cancelled successfully"}
         
+    except HTTPException as exc:
+        raise exc
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -430,7 +437,7 @@ async def modify_order(
         
         # Use the fixed IIFL service
         iifl_service = IIFLService(db)
-        modify_result = iifl_service.modify_order(db, current_user.id, order_id, modification)
+        modify_result = await iifl_service.modify_order(db, current_user.id, order_id, modification)
         
         # Update trade details
         trade.quantity = modification.quantity
@@ -441,6 +448,8 @@ async def modify_order(
         
         return {"status": "success", "message": "Order modified successfully"}
         
+    except HTTPException as exc:
+        raise exc
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -485,7 +494,7 @@ async def square_off_position(
         
         # Use the fixed IIFL service
         iifl_service = IIFLService(db)
-        order_result = iifl_service.place_order(db, current_user.id, square_off_request)
+        order_result = await iifl_service.place_order(db, current_user.id, square_off_request)
         
         return {"status": "success", "message": "Square off order placed successfully"}
         
@@ -537,7 +546,7 @@ async def search_stocks_for_trading(
         iifl_client = IIFLConnect(current_user, api_type="market")
         
         # Login to get token
-        login_response = iifl_client.marketdata_login()
+        login_response = await anyio.to_thread.run_sync(iifl_client.marketdata_login)
         if login_response.get("type") != "success":
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -545,7 +554,7 @@ async def search_stocks_for_trading(
             )
         
         # Search for stocks
-        search_response = iifl_client.search_by_scriptname(q)
+        search_response = await anyio.to_thread.run_sync(iifl_client.search_by_scriptname, q)
         
         if search_response.get("type") != "success" or not search_response.get("result"):
             return StockSearchResponse(
@@ -578,7 +587,8 @@ async def search_stocks_for_trading(
                 }]
                 
                 # Get Touchline data (basic market data)
-                touchline_response = iifl_client.get_quote(
+                touchline_response = await anyio.to_thread.run_sync(
+                    iifl_client.get_quote,
                     Instruments=instruments,
                     xtsMessageCode=iifl_client.MESSAGE_CODE_TOUCHLINE,
                     publishFormat=iifl_client.PUBLISH_FORMAT_JSON
@@ -624,7 +634,7 @@ async def search_stocks_for_trading(
                 continue
         
         # Logout
-        iifl_client.marketdata_logout()
+        await anyio.to_thread.run_sync(iifl_client.marketdata_logout)
         
         return StockSearchResponse(
             type="success",
@@ -680,7 +690,7 @@ async def buy_stock_simple(
         iifl_market_client = IIFLConnect(current_user, api_type="market")
         
         # Login to market data API
-        market_login = iifl_market_client.marketdata_login()
+        market_login = await anyio.to_thread.run_sync(iifl_market_client.marketdata_login)
         if market_login.get("type") != "success":
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -688,10 +698,13 @@ async def buy_stock_simple(
             )
         
         # Search for the stock
-        search_response = iifl_market_client.search_by_scriptname(request.stock_symbol)
+        search_response = await anyio.to_thread.run_sync(
+            iifl_market_client.search_by_scriptname,
+            request.stock_symbol
+        )
         
         if search_response.get("type") != "success" or not search_response.get("result"):
-            iifl_market_client.marketdata_logout()
+            await anyio.to_thread.run_sync(iifl_market_client.marketdata_logout)
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Stock '{request.stock_symbol}' not found"
@@ -702,7 +715,7 @@ async def buy_stock_simple(
         equity_stocks = [s for s in stocks if s.get("ExchangeSegment") == 1 and s.get("Series") == "EQ"]
         
         if not equity_stocks:
-            iifl_market_client.marketdata_logout()
+            await anyio.to_thread.run_sync(iifl_market_client.marketdata_logout)
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Stock '{request.stock_symbol}' is not available for trading"
@@ -718,7 +731,8 @@ async def buy_stock_simple(
             "exchangeInstrumentID": exchange_instrument_id
         }]
         
-        touchline_response = iifl_market_client.get_quote(
+        touchline_response = await anyio.to_thread.run_sync(
+            iifl_market_client.get_quote,
             Instruments=instruments,
             xtsMessageCode=iifl_market_client.MESSAGE_CODE_TOUCHLINE,
             publishFormat=iifl_market_client.PUBLISH_FORMAT_JSON
@@ -743,7 +757,7 @@ async def buy_stock_simple(
             pass
         
         # Logout from market data API
-        iifl_market_client.marketdata_logout()
+        await anyio.to_thread.run_sync(iifl_market_client.marketdata_logout)
         
         # Step 2: Create trade request for IIFL Interactive API
         # NEW APPROACH: We now use the actual instrument details from search results
@@ -778,7 +792,7 @@ async def buy_stock_simple(
         }
         
         # Place the order using the actual instrument details
-        order_result = iifl_service.place_order_with_details(db, current_user.id, custom_trade_request, actual_instrument_details)
+        order_result = await iifl_service.place_order_with_details(db, current_user.id, custom_trade_request, actual_instrument_details)
         
         # Add debug logging
         print(f"DEBUG: Order placed for {request.stock_symbol} with actual instrument ID {exchange_instrument_id}")
@@ -861,7 +875,7 @@ async def get_exchange_status(
         iifl_client = IIFLConnect(current_user, api_type="interactive")
         
         # Login to get token
-        login_response = iifl_client.interactive_login()
+        login_response = await anyio.to_thread.run_sync(iifl_client.interactive_login)
         if login_response.get("type") != "success":
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -869,10 +883,10 @@ async def get_exchange_status(
             )
         
         # Check exchange status
-        status_response = iifl_client.get_exchange_status()
+        status_response = await anyio.to_thread.run_sync(iifl_client.get_exchange_status)
         
         # Logout
-        iifl_client.interactive_logout()
+        await anyio.to_thread.run_sync(iifl_client.interactive_logout)
         
         return {
             "status": "success",
@@ -925,7 +939,7 @@ async def get_stock_quote(
         iifl_client = IIFLConnect(current_user, api_type="market")
         
         # Login to get token
-        login_response = iifl_client.marketdata_login()
+        login_response = await anyio.to_thread.run_sync(iifl_client.marketdata_login)
         if login_response.get("type") != "success":
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -933,10 +947,13 @@ async def get_stock_quote(
             )
         
         # Search for the stock
-        search_response = iifl_client.search_by_scriptname(stock_symbol)
+        search_response = await anyio.to_thread.run_sync(
+            iifl_client.search_by_scriptname,
+            stock_symbol
+        )
         
         if search_response.get("type") != "success" or not search_response.get("result"):
-            iifl_client.marketdata_logout()
+            await anyio.to_thread.run_sync(iifl_client.marketdata_logout)
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Stock '{stock_symbol}' not found"
@@ -947,7 +964,7 @@ async def get_stock_quote(
         equity_stocks = [s for s in stocks if s.get("ExchangeSegment") == 1 and s.get("Series") == "EQ"]
         
         if not equity_stocks:
-            iifl_client.marketdata_logout()
+            await anyio.to_thread.run_sync(iifl_client.marketdata_logout)
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Stock '{stock_symbol}' is not available for trading"
@@ -964,14 +981,16 @@ async def get_stock_quote(
         }]
         
         # Get Touchline data (basic market data)
-        touchline_response = iifl_client.get_quote(
+        touchline_response = await anyio.to_thread.run_sync(
+            iifl_client.get_quote,
             Instruments=instruments,
             xtsMessageCode=iifl_client.MESSAGE_CODE_TOUCHLINE,
             publishFormat=iifl_client.PUBLISH_FORMAT_JSON
         )
         
         # Get Market Depth data (order book)
-        market_depth_response = iifl_client.get_quote(
+        market_depth_response = await anyio.to_thread.run_sync(
+            iifl_client.get_quote,
             Instruments=instruments,
             xtsMessageCode=iifl_client.MESSAGE_CODE_MARKET_DEPTH,
             publishFormat=iifl_client.PUBLISH_FORMAT_JSON
@@ -1001,7 +1020,7 @@ async def get_stock_quote(
             pass
         
         # Logout
-        iifl_client.marketdata_logout()
+        await anyio.to_thread.run_sync(iifl_client.marketdata_logout)
         
         # Compile response
         response_data = StockQuoteResponse(
