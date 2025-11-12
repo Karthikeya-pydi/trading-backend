@@ -1,4 +1,5 @@
 from pydantic_settings import BaseSettings
+from pydantic import Field
 from typing import Optional
 
 class Settings(BaseSettings):
@@ -62,7 +63,32 @@ class Settings(BaseSettings):
     aws_region: str = "ap-south-1"
     input_s3_bucket_name: str = "trading-platform-csvs"
     
+    # Azure OpenAI settings (Azure API Management)
+    # Your endpoint format: https://oab-sophius-devtest-01.azure-api.net/karthikeya.chowdary/v1/openai/deployments/{deployment-id}/chat/completions?api-version={api-version}
+    # 
+    # Required .env variables:
+    # AZURE_OPENAI_API_KEY=your_api_key_here
+    # AZURE_OPENAI_ENDPOINT=https://oab-sophius-devtest-01.azure-api.net/karthikeya.chowdary/v1
+    # AZURE_OPENAI_DEPLOYMENT_NAME=your-deployment-id
+    # AZURE_OPENAI_API_VERSION=2024-02-15-preview (or your API version)
+    #
+    # Optional .env variables:
+    # AZURE_OPENAI_MODEL=gpt-4o (default, not used if deployment_name is set)
+    # LLM_TEMPERATURE=0.3 (default)
+    # LLM_MAX_TOKENS=2000 (default)
+    # CHAT_HISTORY_LIMIT=10 (default)
+    azure_openai_api_key: Optional[str] = Field(None, alias="AZURE_OPENAI_API_KEY")
+    azure_openai_endpoint: Optional[str] = Field(None, alias="AZURE_OPENAI_ENDPOINT")  # Base endpoint without /openai (e.g., https://oab-sophius-devtest-01.azure-api.net/karthikeya.chowdary/v1)
+    azure_openai_api_version: str = Field("2024-02-15-preview", alias="AZURE_OPENAI_API_VERSION")  # API version for query param
+    azure_openai_model: str = Field("gpt-4o", alias="AZURE_OPENAI_MODEL")  # Model name (not used if deployment_name is set)
+    azure_openai_deployment_name: Optional[str] = Field(None, alias="AZURE_OPENAI_DEPLOYMENT_NAME")  # Deployment ID (REQUIRED - this is your deployment-id)
+    llm_temperature: float = Field(0.3, alias="LLM_TEMPERATURE")
+    llm_max_tokens: int = Field(2000, alias="LLM_MAX_TOKENS")
+    chat_history_limit: int = Field(10, alias="CHAT_HISTORY_LIMIT")  # Number of previous messages to include in context
+    
     class Config:
         env_file = ".env"
+        populate_by_name = True  # Allow both field name and alias to work
+        case_sensitive = False  # Case-insensitive for environment variables
 
 settings = Settings()

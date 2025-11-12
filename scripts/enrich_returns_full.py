@@ -22,7 +22,7 @@ from urllib3.util.retry import Retry
 
 LOGGER = logging.getLogger("enrich_returns_full")
 
-DEFAULT_INPUT = Path("scripts") / "screener_output" / "returns-2025-11-11.csv"
+DEFAULT_INPUT = Path("scripts") / "screener_output" / "returns-2025-11-12.csv"
 DEFAULT_OUTPUT = Path("scripts") / "screener_output" / "returns_with_full_metrics.csv"
 
 ROE_ROCE_CACHE = Path("scripts") / "screener_output" / "roe_roce_cache.json"

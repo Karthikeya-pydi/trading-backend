@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 import sys # Import sys for printing directly to stderr if needed
 
 from app.core import settings, engine, Base, TokenRefreshMiddleware
-from app.api.routes import auth, users, trading, market_data, websocket, iifl, portfolio, returns, stock_analysis
+from app.api.routes import auth, users, trading, market_data, websocket, iifl, portfolio, returns, stock_analysis, llm_routes
 # from app.core.logging import setup_logging  # ← DISABLED FOR VERCEL
 # from app.core.websocket_manager import manager  # DISABLED - No Redis
 # from app.services.realtime_service import realtime_service  # DISABLED - No Redis
@@ -84,6 +84,7 @@ app.include_router(iifl.router, prefix="/api/iifl", tags=["IIFL Integration"])
 app.include_router(portfolio.router, prefix="/api/portfolio", tags=["Portfolio"])
 app.include_router(returns.router, prefix="/api/returns", tags=["Stock Returns"])
 app.include_router(stock_analysis.router, prefix="/api/stock-analysis", tags=["Stock Analysis"])
+app.include_router(llm_routes.router, prefix="/api/llm", tags=["LLM Chat Assistant"])
 
 @app.get("/")
 async def root():
