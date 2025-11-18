@@ -274,11 +274,37 @@ class DataFormatter:
             # Only include equity stocks (series EQ, BE, etc.)
             equity_data = []
             for stock in data_list:
-                series = stock.get("series") or stock.get("SERIES", "").upper()
-                symbol = stock.get("symbol") or stock.get("SYMBOL", "")
+                if not isinstance(stock, dict):
+                    continue
+                
+                # Get series (handle missing field gracefully)
+                series = (
+                    stock.get("series") or 
+                    stock.get("SERIES") or 
+                    "EQ"  # Default to EQ if not specified
+                )
+                if isinstance(series, str):
+                    series = series.strip().upper()
+                else:
+                    series = "EQ"
+                
+                # Get symbol
+                symbol = (
+                    stock.get("symbol") or 
+                    stock.get("SYMBOL") or 
+                    ""
+                )
+                if isinstance(symbol, str):
+                    symbol = symbol.strip().upper()
+                else:
+                    symbol = ""
                 
                 # Skip G-Secs (contain "GS" in symbol) and other non-equity instruments
-                if "GS" in symbol.upper() or series not in ["EQ", "BE", "BZ", "B1", "B2"]:
+                if symbol and "GS" in symbol:
+                    continue
+                
+                # Filter by series if provided
+                if series and series not in ["EQ", "BE", "BZ", "B1", "B2", ""]:
                     continue
                 
                 # Only include stocks with price data
@@ -306,7 +332,7 @@ class DataFormatter:
             
             for stock in equity_data:
                 symbol = stock.get("symbol") or stock.get("SYMBOL", "N/A")
-                series = stock.get("series") or stock.get("SERIES", "")
+                series = stock.get("series") or stock.get("SERIES") or "EQ"  # Default to EQ if missing
                 
                 # Get price data (try multiple field names)
                 prev_close = (

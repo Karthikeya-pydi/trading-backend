@@ -156,52 +156,80 @@ async def chat(
                     file_info = s3_service.get_latest_bhavcopy_file()
                     if file_info:
                         df = s3_service.get_bhavcopy_data(file_info['s3_key'])
-                        if df is not None:
-                            # Filter to only equity stocks (series EQ, BE, etc.)
-                            equity_series = ['EQ', 'BE', 'BZ', 'B1', 'B2']
-                            df = df[df['SERIES'].str.strip().str.upper().isin(equity_series)]
+                        if df is not None and not df.empty:
+                            # Clean column names (strip whitespace)
+                            df.columns = df.columns.str.strip()
                             
-                            # Filter out G-Secs and other non-equity instruments
-                            df = df[~df['SYMBOL'].str.contains('GS', case=False, na=False)]
-                            
-                            # Filter out rows with no price data
-                            df = df[df['CLOSE_PRICE'].notna() & (df['CLOSE_PRICE'] != '-')]
-                            
-                            # Convert volume to numeric for sorting
-                            try:
-                                df['TTL_TRD_QNTY_NUM'] = pd.to_numeric(df['TTL_TRD_QNTY'].replace('-', '0'), errors='coerce')
-                                # Sort by volume descending and get top 30
-                                df = df.sort_values('TTL_TRD_QNTY_NUM', ascending=False).head(30)
-                            except Exception as e:
-                                logger.warning(f"Error sorting by volume: {e}")
-                                df = df.head(30)
-                            
-                            # Convert to records with proper field names
-                            records = []
-                            for _, row in df.iterrows():
-                                record = {
-                                    "symbol": row['SYMBOL'].strip() if pd.notna(row['SYMBOL']) else None,
-                                    "series": row['SERIES'].strip() if pd.notna(row['SERIES']) else None,
-                                    "date": row['DATE1'].strip() if pd.notna(row['DATE1']) else None,
-                                    "prev_close": float(row['PREV_CLOSE']) if pd.notna(row['PREV_CLOSE']) and row['PREV_CLOSE'] != '-' else None,
-                                    "open_price": float(row['OPEN_PRICE']) if pd.notna(row['OPEN_PRICE']) and row['OPEN_PRICE'] != '-' else None,
-                                    "high_price": float(row['HIGH_PRICE']) if pd.notna(row['HIGH_PRICE']) and row['HIGH_PRICE'] != '-' else None,
-                                    "low_price": float(row['LOW_PRICE']) if pd.notna(row['LOW_PRICE']) and row['LOW_PRICE'] != '-' else None,
-                                    "close_price": float(row['CLOSE_PRICE']) if pd.notna(row['CLOSE_PRICE']) and row['CLOSE_PRICE'] != '-' else None,
-                                    "total_traded_qty": int(row['TTL_TRD_QNTY']) if pd.notna(row['TTL_TRD_QNTY']) and row['TTL_TRD_QNTY'] != '-' else None,
-                                    "turnover_lacs": float(row['TURNOVER_LACS']) if pd.notna(row['TURNOVER_LACS']) and row['TURNOVER_LACS'] != '-' else None,
-                                }
-                                records.append(record)
-                            
-                            if records:
-                                bhavcopy_data = {
-                                    "status": "success",
-                                    "data": records
-                                }
-                                logger.info(f"Fetched {len(records)} equity stocks from bhavcopy for user {current_user.id}")
-                            else:
-                                logger.warning("No equity stocks found in bhavcopy data")
+                            # Check if required columns exist
+                            required_cols = ['SYMBOL', 'CLOSE_PRICE']
+                            missing_cols = [col for col in required_cols if col not in df.columns]
+                            if missing_cols:
+                                logger.error(f"Missing required columns in bhavcopy: {missing_cols}")
+                                logger.info(f"Available columns: {list(df.columns)}")
                                 bhavcopy_data = None
+                            else:
+                                # Filter to only equity stocks (series EQ, BE, etc.) if SERIES column exists
+                                if 'SERIES' in df.columns:
+                                    equity_series = ['EQ', 'BE', 'BZ', 'B1', 'B2']
+                                    df = df[df['SERIES'].str.strip().str.upper().isin(equity_series)]
+                                
+                                # Filter out G-Secs and other non-equity instruments
+                                if 'SYMBOL' in df.columns:
+                                    df = df[~df['SYMBOL'].str.contains('GS', case=False, na=False)]
+                                
+                                # Filter out rows with no price data
+                                if 'CLOSE_PRICE' in df.columns:
+                                    df = df[df['CLOSE_PRICE'].notna() & (df['CLOSE_PRICE'] != '-')]
+                                
+                                # Convert volume to numeric for sorting
+                                try:
+                                    if 'TTL_TRD_QNTY' in df.columns:
+                                        df['TTL_TRD_QNTY_NUM'] = pd.to_numeric(df['TTL_TRD_QNTY'].replace('-', '0'), errors='coerce')
+                                        # Sort by volume descending and get top 30
+                                        df = df.sort_values('TTL_TRD_QNTY_NUM', ascending=False).head(30)
+                                    else:
+                                        # If no volume column, just get first 30
+                                        df = df.head(30)
+                                except Exception as e:
+                                    logger.warning(f"Error sorting by volume: {e}")
+                                    df = df.head(30)
+                                
+                                # Convert to records with proper field names
+                                records = []
+                                for _, row in df.iterrows():
+                                    try:
+                                        record = {
+                                            "symbol": row['SYMBOL'].strip() if pd.notna(row.get('SYMBOL')) else None,
+                                            "series": row['SERIES'].strip() if 'SERIES' in df.columns and pd.notna(row.get('SERIES')) else "EQ",
+                                            "date": row['DATE1'].strip() if 'DATE1' in df.columns and pd.notna(row.get('DATE1')) else None,
+                                            "prev_close": float(row['PREV_CLOSE']) if 'PREV_CLOSE' in df.columns and pd.notna(row.get('PREV_CLOSE')) and row.get('PREV_CLOSE') != '-' else None,
+                                            "open_price": float(row['OPEN_PRICE']) if 'OPEN_PRICE' in df.columns and pd.notna(row.get('OPEN_PRICE')) and row.get('OPEN_PRICE') != '-' else None,
+                                            "high_price": float(row['HIGH_PRICE']) if 'HIGH_PRICE' in df.columns and pd.notna(row.get('HIGH_PRICE')) and row.get('HIGH_PRICE') != '-' else None,
+                                            "low_price": float(row['LOW_PRICE']) if 'LOW_PRICE' in df.columns and pd.notna(row.get('LOW_PRICE')) and row.get('LOW_PRICE') != '-' else None,
+                                            "close_price": float(row['CLOSE_PRICE']) if pd.notna(row.get('CLOSE_PRICE')) and row.get('CLOSE_PRICE') != '-' else None,
+                                            "total_traded_qty": int(row['TTL_TRD_QNTY']) if 'TTL_TRD_QNTY' in df.columns and pd.notna(row.get('TTL_TRD_QNTY')) and row.get('TTL_TRD_QNTY') != '-' else None,
+                                            "turnover_lacs": float(row['TURNOVER_LACS']) if 'TURNOVER_LACS' in df.columns and pd.notna(row.get('TURNOVER_LACS')) and row.get('TURNOVER_LACS') != '-' else None,
+                                        }
+                                        records.append(record)
+                                    except Exception as e:
+                                        logger.warning(f"Error processing row: {e}")
+                                        continue
+                                
+                                if records:
+                                    bhavcopy_data = {
+                                        "status": "success",
+                                        "data": records
+                                    }
+                                    logger.info(f"Fetched {len(records)} equity stocks from bhavcopy for user {current_user.id}")
+                                else:
+                                    logger.warning("No equity stocks found in bhavcopy data after processing")
+                                    bhavcopy_data = None
+                        else:
+                            logger.warning("Bhavcopy DataFrame is None or empty")
+                            bhavcopy_data = None
+                    else:
+                        logger.warning("No bhavcopy file found in S3")
+                        bhavcopy_data = None
                 
                 logger.info(f"Fetched bhavcopy data for user {current_user.id}")
             except Exception as e:
