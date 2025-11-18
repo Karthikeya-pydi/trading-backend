@@ -4,29 +4,42 @@ import argparse
 import json
 import logging
 import math
+import os
 import re
 import sys
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from io import BytesIO, StringIO
 from typing import Dict, Iterable, List, Optional
 
+import boto3
 import pandas as pd
 import requests
+from botocore.exceptions import ClientError, NoCredentialsError
 from bs4 import BeautifulSoup
 from requests import Response, Session
 from requests.adapters import HTTPAdapter
 from requests.exceptions import RequestException
 from urllib3.util.retry import Retry
 
-LOGGER = logging.getLogger("enrich_returns_full")
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
-DEFAULT_INPUT = Path("scripts") / "screener_output" / "returns-2025-11-11.csv"
-DEFAULT_OUTPUT = Path("scripts") / "screener_output" / "returns_with_full_metrics.csv"
+S3_BUCKET = os.getenv("S3_BUCKET_NAME", "trading-platform-csvs")
+AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
+S3_INPUT_FOLDER = "adjusted-eq-data"
+S3_OUTPUT_FOLDER = "returns"
+S3_ROE_ROCE_FOLDER = "roe-roce"
+S3_SECTOR_FOLDER = "sector"
 
-ROE_ROCE_CACHE = Path("scripts") / "screener_output" / "roe_roce_cache.json"
-SECTOR_CACHE = Path("scripts") / "screener_output" / "screener_sector_industry_cache.csv"
+DEFAULT_INPUT_S3_KEY = None
+DEFAULT_OUTPUT_S3_KEY = f"{S3_OUTPUT_FOLDER}/returns_with_full_metrics.csv"
+DEFAULT_ROE_ROCE_CACHE_S3_KEY = f"{S3_ROE_ROCE_FOLDER}/roe_roce_cache.json"
+DEFAULT_SECTOR_CACHE_S3_KEY = f"{S3_SECTOR_FOLDER}/screener_sector_industry_cache.csv"
 
 DEFAULT_DELAY_SECONDS = 4.0
 DEFAULT_CACHE_TTL_HOURS = 48
@@ -48,6 +61,142 @@ SCREENER_HEADERS = {
     "Connection": "keep-alive",
     "Upgrade-Insecure-Requests": "1",
 }
+
+
+def _get_s3_client():
+    """Initialize and return S3 client with optional credentials."""
+    access_key = os.getenv("AWS_ACCESS_KEY_ID")
+    secret_key = os.getenv("AWS_SECRET_ACCESS_KEY")
+    region = os.getenv("AWS_REGION", AWS_REGION)
+    
+    client_kwargs = {"service_name": "s3"}
+    if region:
+        client_kwargs["region_name"] = region
+    
+    if access_key and secret_key:
+        client_kwargs["aws_access_key_id"] = access_key
+        client_kwargs["aws_secret_access_key"] = secret_key
+        return boto3.client(**client_kwargs)
+    
+    try:
+        return boto3.client(**client_kwargs)
+    except Exception as exc:  # noqa: BLE001
+        raise
+
+
+def _read_csv_from_s3(s3_key: str, bucket: str = S3_BUCKET) -> pd.DataFrame:
+    """Read CSV file from S3 and return as DataFrame."""
+    try:
+        s3_client = _get_s3_client()
+        response = s3_client.get_object(Bucket=bucket, Key=s3_key)
+        return pd.read_csv(BytesIO(response["Body"].read()))
+    except NoCredentialsError:
+        raise
+    except ClientError as exc:
+        error_code = exc.response.get("Error", {}).get("Code", "")
+        if error_code == "NoSuchKey":
+            return pd.DataFrame()
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise
+
+
+def _write_csv_to_s3(df: pd.DataFrame, s3_key: str, bucket: str = S3_BUCKET) -> None:
+    """Write DataFrame to S3 as CSV."""
+    try:
+        s3_client = _get_s3_client()
+        csv_buffer = StringIO()
+        df.to_csv(csv_buffer, index=False)
+        s3_client.put_object(
+            Bucket=bucket,
+            Key=s3_key,
+            Body=csv_buffer.getvalue().encode("utf-8"),
+            ContentType="text/csv",
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise
+
+
+def _read_json_from_s3(s3_key: str, bucket: str = S3_BUCKET) -> Dict:
+    """Read JSON file from S3 and return as dict."""
+    try:
+        s3_client = _get_s3_client()
+        response = s3_client.get_object(Bucket=bucket, Key=s3_key)
+        return json.loads(response["Body"].read().decode("utf-8"))
+    except ClientError as exc:
+        error_code = exc.response.get("Error", {}).get("Code", "")
+        if error_code == "NoSuchKey":
+            return {}
+        raise
+    except Exception as exc:  # noqa: BLE001
+        return {}
+
+
+def _write_json_to_s3(data: Dict, s3_key: str, bucket: str = S3_BUCKET) -> None:
+    """Write dict to S3 as JSON."""
+    try:
+        s3_client = _get_s3_client()
+        s3_client.put_object(
+            Bucket=bucket,
+            Key=s3_key,
+            Body=json.dumps(data, indent=2, sort_keys=True).encode("utf-8"),
+            ContentType="application/json",
+        )
+    except Exception as exc:  # noqa: BLE001
+        pass
+
+
+def _s3_key_exists(s3_key: str, bucket: str = S3_BUCKET) -> bool:
+    """Check if S3 key exists."""
+    try:
+        s3_client = _get_s3_client()
+        s3_client.head_object(Bucket=bucket, Key=s3_key)
+        return True
+    except NoCredentialsError:
+        raise
+    except ClientError as exc:
+        error_code = exc.response.get("Error", {}).get("Code", "")
+        if error_code == "404" or error_code == "NoSuchKey":
+            return False
+        raise
+
+
+def _find_latest_returns_file(bucket: str = S3_BUCKET, prefix: str = S3_INPUT_FOLDER) -> Optional[str]:
+    """Find the latest returns file in S3 bucket matching returns-*.csv pattern."""
+    try:
+        s3_client = _get_s3_client()
+        
+        response = s3_client.list_objects_v2(
+            Bucket=bucket,
+            Prefix=f"{prefix}/returns-",
+        )
+        
+        if "Contents" not in response:
+            return None
+        
+        returns_files = []
+        for obj in response["Contents"]:
+            key = obj["Key"]
+            if key.endswith(".csv") and "returns-" in key:
+                try:
+                    filename = key.split("/")[-1]
+                    date_str = filename.replace("returns-", "").replace(".csv", "")
+                    date_obj = datetime.strptime(date_str, "%Y-%m-%d")
+                    returns_files.append((date_obj, key))
+                except (ValueError, IndexError):
+                    continue
+        
+        if not returns_files:
+            return None
+        
+        returns_files.sort(key=lambda x: x[0], reverse=True)
+        latest_file = returns_files[0][1]
+        return latest_file
+        
+    except NoCredentialsError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        return None
 
 
 @dataclass
@@ -101,19 +250,21 @@ class ScreenerClient:
         self,
         *,
         delay_seconds: float = DEFAULT_DELAY_SECONDS,
-        cache_path: Optional[Path] = None,
+        cache_s3_key: Optional[str] = None,
         cache_ttl_hours: float = DEFAULT_CACHE_TTL_HOURS,
         max_retries: int = 5,
         timeout_seconds: float = 30.0,
+        bucket: str = S3_BUCKET,
     ) -> None:
         self.delay_seconds = max(0.0, delay_seconds)
-        self.cache_path = cache_path
+        self.cache_s3_key = cache_s3_key
         self.cache_ttl = timedelta(hours=cache_ttl_hours)
         self.timeout = timeout_seconds
+        self.bucket = bucket
         self.session = self._configure_session(max_retries)
         self.cache: Dict[str, ScreenerFetchResult] = {}
-        if cache_path:
-            self._load_cache(cache_path)
+        if cache_s3_key:
+            self._load_cache(cache_s3_key)
 
     @staticmethod
     def _configure_session(max_retries: int) -> requests.Session:
@@ -133,32 +284,29 @@ class ScreenerClient:
         session.headers.update(SCREENER_HEADERS)
         return session
 
-    def _load_cache(self, cache_path: Path) -> None:
-        if not cache_path.exists():
+    def _load_cache(self, cache_s3_key: str) -> None:
+        if not _s3_key_exists(cache_s3_key, self.bucket):
             return
         try:
-            data = json.loads(cache_path.read_text(encoding="utf-8"))
+            data = _read_json_from_s3(cache_s3_key, self.bucket)
         except Exception as exc:  # noqa: BLE001
-            LOGGER.warning("Failed to read Screener cache %s: %s", cache_path, exc)
             return
         for key, payload in data.items():
             try:
                 result = ScreenerFetchResult.from_cache(payload)
             except Exception as exc:  # noqa: BLE001
-                LOGGER.warning("Skipping corrupt Screener cache entry for %s: %s", key, exc)
                 continue
             if self._is_cache_fresh(result):
                 self.cache[key] = result
 
     def _persist_cache(self) -> None:
-        if not self.cache_path:
+        if not self.cache_s3_key:
             return
         try:
             payload = {key: result.to_cache() for key, result in self.cache.items()}
-            self.cache_path.parent.mkdir(parents=True, exist_ok=True)
-            self.cache_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+            _write_json_to_s3(payload, self.cache_s3_key, self.bucket)
         except Exception as exc:  # noqa: BLE001
-            LOGGER.warning("Failed to persist Screener cache to %s: %s", self.cache_path, exc)
+            pass
 
     def _is_cache_fresh(self, result: ScreenerFetchResult) -> bool:
         return datetime.now(timezone.utc) - result.fetched_at <= self.cache_ttl
@@ -221,7 +369,6 @@ class ScreenerClient:
     def _request(self, url: str) -> Optional[str]:
         response = self.session.get(url, timeout=self.timeout)
         if response.status_code == 404:
-            LOGGER.warning("Screener returned 404 for %s", url)
             return None
         response.raise_for_status()
         if self.delay_seconds:
@@ -320,20 +467,20 @@ def _is_missing(value: object) -> bool:
     return False
 
 
-def _load_sector_cache(cache_path: Path) -> Dict[str, Dict[str, object]]:
-    if not cache_path.exists():
+def _load_sector_cache(cache_s3_key: str, bucket: str = S3_BUCKET) -> Dict[str, Dict[str, object]]:
+    if not _s3_key_exists(cache_s3_key, bucket):
         return {}
     try:
-        df = pd.read_csv(cache_path)
+        df = _read_csv_from_s3(cache_s3_key, bucket)
+        if df.empty:
+            return {}
     except Exception as exc:  # noqa: BLE001
-        LOGGER.warning("Failed to read sector cache %s: %s", cache_path, exc)
         return {}
 
     normalized_cols = [c.strip().lower() for c in df.columns]
     df.columns = normalized_cols
     required = {"symbol", "macro", "sector", "industry", "basicindustry"}
     if not required.issubset(set(normalized_cols)):
-        LOGGER.warning("Sector cache %s missing expected columns. Ignoring.", cache_path)
         return {}
 
     cache: Dict[str, Dict[str, object]] = {}
@@ -354,7 +501,7 @@ def _load_sector_cache(cache_path: Path) -> Dict[str, Dict[str, object]]:
     return cache
 
 
-def _write_sector_cache(cache_path: Path, cache: Dict[str, Dict[str, object]]) -> None:
+def _write_sector_cache(cache_s3_key: str, cache: Dict[str, Dict[str, object]], bucket: str = S3_BUCKET) -> None:
     records = []
     for symbol, info in sorted(cache.items()):
         records.append(
@@ -367,8 +514,8 @@ def _write_sector_cache(cache_path: Path, cache: Dict[str, Dict[str, object]]) -
                 "MarketCapCrore": info.get("marketCapCrore"),
             }
         )
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame(records).to_csv(cache_path, index=False)
+    df = pd.DataFrame(records)
+    _write_csv_to_s3(df, cache_s3_key, bucket)
 
 
 def _fetch_nse_metadata(session: Session, symbol: str) -> Optional[Dict[str, object]]:
@@ -380,7 +527,6 @@ def _fetch_nse_metadata(session: Session, symbol: str) -> Optional[Dict[str, obj
             )
         except RequestException as exc:
             if attempt == NSE_MAX_RETRIES:
-                LOGGER.warning("%s: NSE request failed (%s); giving up.", symbol, exc)
                 return None
             time.sleep(NSE_THROTTLE_SECONDS * attempt)
             continue
@@ -395,7 +541,6 @@ def _fetch_nse_metadata(session: Session, symbol: str) -> Optional[Dict[str, obj
 
         if response.status_code != 200:
             if attempt == NSE_MAX_RETRIES:
-                LOGGER.warning("%s: unexpected NSE status %s", symbol, response.status_code)
                 return None
             time.sleep(NSE_THROTTLE_SECONDS * attempt)
             continue
@@ -404,7 +549,6 @@ def _fetch_nse_metadata(session: Session, symbol: str) -> Optional[Dict[str, obj
             payload = response.json()
         except ValueError:
             if attempt == NSE_MAX_RETRIES:
-                LOGGER.warning("%s: invalid NSE JSON payload", symbol)
                 return None
             time.sleep(NSE_THROTTLE_SECONDS * attempt)
             continue
@@ -449,28 +593,24 @@ def enrich_returns(
     df: pd.DataFrame,
     *,
     screener_client: ScreenerClient,
-    sector_cache_path: Path,
+    sector_cache_s3_key: str,
     nse_throttle_seconds: float = NSE_THROTTLE_SECONDS,
+    bucket: str = S3_BUCKET,
 ) -> pd.DataFrame:
     if "ISIN" not in df.columns or "Symbol" not in df.columns:
         raise SystemExit("Input CSV must contain 'ISIN' and 'Symbol' columns.")
 
-    sector_cache = _load_sector_cache(sector_cache_path)
+    sector_cache = _load_sector_cache(sector_cache_s3_key, bucket)
     nse_session = _bootstrap_nse_session()
 
     sector_rows = []
-    total = len(df)
 
-    LOGGER.info("Processing %d rows", total)
-
-    for idx, row in df.iterrows():
+    for _, row in df.iterrows():
         isin = str(row.get("ISIN")) if not pd.isna(row.get("ISIN")) else None
         symbol = str(row.get("Symbol")) if not pd.isna(row.get("Symbol")) else None
 
-        # Screener data
         screener_result = screener_client.fetch(isin=isin, symbol=symbol)
 
-        # NSE metadata
         normalized_symbol = (symbol or "").strip().upper()
         info = dict(sector_cache.get(normalized_symbol, {}))
         nse_keys = ("sector", "industry", "marketCapCrore")
@@ -480,7 +620,7 @@ def enrich_returns(
                 if nse_info:
                     info.update(nse_info)
                     sector_cache[normalized_symbol] = info
-                    _write_sector_cache(sector_cache_path, sector_cache)
+                    _write_sector_cache(sector_cache_s3_key, sector_cache, bucket)
                 time.sleep(nse_throttle_seconds)
 
         sector_rows.append(
@@ -493,19 +633,6 @@ def enrich_returns(
             }
         )
 
-        status_parts = []
-        if screener_result.roe_percent is not None:
-            status_parts.append(f"ROE={screener_result.roe_percent:.2f}%")
-        if screener_result.roce_percent is not None:
-            status_parts.append(f"ROCE={screener_result.roce_percent:.2f}%")
-        if info.get("sector"):
-            status_parts.append(f"Sector={info.get('sector')}")
-        if info.get("industry"):
-            status_parts.append(f"Industry={info.get('industry')}")
-        if info.get("marketCapCrore") is not None:
-            status_parts.append(f"MC={info.get('marketCapCrore'):.1f}Cr")
-        LOGGER.info("[%d/%d] %s -> %s", idx + 1, total, symbol or isin or "?", ", ".join(status_parts) or "missing")
-
     enrichment_df = pd.DataFrame(sector_rows)
     merged = pd.concat([df.reset_index(drop=True), enrichment_df], axis=1)
     screener_client._persist_cache()
@@ -516,8 +643,19 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Enrich returns CSV with ROE/ROCE plus sector, industry, and market cap."
     )
-    parser.add_argument("--input", type=Path, default=DEFAULT_INPUT, help="Path to source returns CSV.")
-    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT, help="Output CSV path.")
+    parser.add_argument(
+        "--input",
+        type=str,
+        default=None,
+        help="S3 key to source returns CSV (e.g., 'adjusted-eq-data/returns-2025-11-17.csv'). "
+        "If not specified, will use the latest returns-*.csv file from the input folder.",
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        default=DEFAULT_OUTPUT_S3_KEY,
+        help="S3 key for output CSV (e.g., 'returns/returns_with_full_metrics.csv').",
+    )
     parser.add_argument(
         "--delay",
         type=float,
@@ -540,15 +678,21 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--roe-cache",
-        type=Path,
-        default=ROE_ROCE_CACHE,
-        help="Path to Screener ROE/ROCE cache JSON file.",
+        type=str,
+        default=DEFAULT_ROE_ROCE_CACHE_S3_KEY,
+        help="S3 key to Screener ROE/ROCE cache JSON file (e.g., 'roe-roce/roe_roce_cache.json').",
     )
     parser.add_argument(
         "--sector-cache",
-        type=Path,
-        default=SECTOR_CACHE,
-        help="Path to NSE sector cache CSV file.",
+        type=str,
+        default=DEFAULT_SECTOR_CACHE_S3_KEY,
+        help="S3 key to NSE sector cache CSV file (e.g., 'sector/screener_sector_industry_cache.csv').",
+    )
+    parser.add_argument(
+        "--bucket",
+        type=str,
+        default=S3_BUCKET,
+        help="S3 bucket name (default: trading-platform-csvs).",
     )
     parser.add_argument(
         "-v",
@@ -573,48 +717,59 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     args = parse_args(argv)
     _configure_logging(args.verbose)
 
-    if not args.input.exists():
-        LOGGER.error("Input file %s does not exist.", args.input)
+    bucket = args.bucket
+
+    input_s3_key = args.input
+    if not input_s3_key:
+        try:
+            input_s3_key = _find_latest_returns_file(bucket, S3_INPUT_FOLDER)
+            if not input_s3_key:
+                return 1
+        except NoCredentialsError:
+            return 1
+
+    try:
+        if not _s3_key_exists(input_s3_key, bucket):
+            return 1
+    except NoCredentialsError:
         return 1
 
     try:
-        df = pd.read_csv(args.input)
+        df = _read_csv_from_s3(input_s3_key, bucket)
+        if df.empty:
+            return 1
+    except NoCredentialsError:
+        return 1
     except Exception as exc:  # noqa: BLE001
-        LOGGER.error("Failed to read %s: %s", args.input, exc)
         return 1
 
     screener_client = ScreenerClient(
         delay_seconds=args.delay,
-        cache_path=args.roe_cache,
+        cache_s3_key=args.roe_cache,
         cache_ttl_hours=args.cache_ttl_hours,
         timeout_seconds=args.timeout,
         max_retries=args.max_retries,
+        bucket=bucket,
     )
 
     try:
         enriched = enrich_returns(
             df,
             screener_client=screener_client,
-            sector_cache_path=args.sector_cache,
+            sector_cache_s3_key=args.sector_cache,
             nse_throttle_seconds=args.nse_throttle,
+            bucket=bucket,
         )
     except Exception as exc:  # noqa: BLE001
-        LOGGER.error("Failed enrichment: %s", exc)
         return 1
 
     try:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        enriched.to_csv(args.output, index=False)
+        _write_csv_to_s3(enriched, args.output, bucket)
+    except NoCredentialsError:
+        return 1
     except Exception as exc:  # noqa: BLE001
-        LOGGER.error("Failed to write %s: %s", args.output, exc)
         return 1
 
-    LOGGER.info(
-        "Enriched data written to %s (%d rows, %d unique ISINs).",
-        args.output,
-        len(enriched),
-        enriched["ISIN"].nunique() if "ISIN" in enriched.columns else len(enriched),
-    )
     return 0
 
 
