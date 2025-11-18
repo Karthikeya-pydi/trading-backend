@@ -13,6 +13,7 @@ from . import iifl
 from . import portfolio
 from . import returns
 from . import stock_analysis
+from . import llm_routes
 
 __all__ = [
     "auth",
@@ -24,5 +25,6 @@ __all__ = [
     "portfolio",
     "returns",
     "stock_analysis",
+    "llm_routes",
 ]
 
