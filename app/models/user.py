@@ -27,4 +27,4 @@ class User(Base):
     iifl_interactive_user_id = Column(String, nullable=True)
     
     # Trading preferences
-    trading_preferences = Column(JSON, default={})
+    trading_preferences = Column(JSON, default=dict)

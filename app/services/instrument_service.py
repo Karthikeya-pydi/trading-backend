@@ -4,6 +4,7 @@ from typing import List, Dict, Optional
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, and_, func, text
+import anyio
 
 from app.models.instrument import Instrument
 from app.services.iifl_service import IIFLService
@@ -31,7 +32,10 @@ class InstrumentService:
             logger.info(f"Starting instrument download for segments: {exchange_segments}")
             
             # Download from IIFL
-            master_data = self.iifl_service.get_instrument_master(self.db, user_id, exchange_segments)
+            async def _fetch_master():
+                return await self.iifl_service.get_instrument_master(self.db, user_id, exchange_segments)
+
+            master_data = anyio.run(_fetch_master)
             
             if master_data.get("type") != "success":
                 raise Exception(f"IIFL download failed: {master_data.get('description')}")
@@ -303,16 +307,19 @@ class InstrumentMappingService:
             iifl_client = IIFLConnect(user, api_type="market")
             
             # Login to get token
-            login_response = iifl_client.marketdata_login()
+            login_response = await anyio.to_thread.run_sync(iifl_client.marketdata_login)
             if login_response.get("type") != "success":
                 logger.error(f"Failed to login to IIFL Market Data API for instrument {instrument_id}")
                 return None
             
             # Search for instruments by ID
-            search_response = iifl_client.search_by_instrument_id(instrument_id)
+            search_response = await anyio.to_thread.run_sync(
+                iifl_client.search_by_instrument_id,
+                instrument_id
+            )
             
             # Logout
-            iifl_client.marketdata_logout()
+            await anyio.to_thread.run_sync(iifl_client.marketdata_logout)
             
             if search_response.get("type") == "success" and search_response.get("result"):
                 instruments = search_response["result"]

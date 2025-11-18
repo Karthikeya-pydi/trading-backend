@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from fastapi import HTTPException, Depends
 import traceback
 import json
+import anyio
 
 from app.models.user import User
 from app.schemas.trading import TradeRequest, MarketDataRequest
@@ -30,12 +31,7 @@ class IIFLService:
         # Return cached client if exists and still valid
         if cache_key in self._client_cache:
             client = self._client_cache[cache_key]
-            # Check if client is still authenticated
-            if client.token:
-                return client
-            else:
-                # Remove invalid client from cache
-                del self._client_cache[cache_key]
+            return client
         
         # Get user and create new client
         user = self.db.query(User).filter(User.id == user_id).first()
@@ -57,25 +53,27 @@ class IIFLService:
         except Exception as e:
             logger.error(f"Failed to create IIFL client: {traceback.format_exc()}")
             raise ValueError(f"Failed to create IIFL client: {str(e)}")
-        
-        # Login and cache the client
+
+        self._client_cache[cache_key] = client
+        return client
+
+    async def _ensure_client_logged_in(self, client: IIFLConnect, user_id: int, api_type: Literal["market", "interactive"]):
+        """Ensure the given client has a valid token, logging in if necessary."""
+        if client.token:
+            return
+
         try:
             if api_type == "interactive":
-                login_response = client.interactive_login()
+                login_response = await anyio.to_thread.run_sync(client.interactive_login)
                 logger.info(f"IIFL Interactive login successful for user {user_id}: {login_response}")
-            else:  # market
-                login_response = client.marketdata_login()
+            else:
+                login_response = await anyio.to_thread.run_sync(client.marketdata_login)
                 logger.info(f"IIFL Market Data login successful for user {user_id}: {login_response}")
-            
-            # Cache the authenticated client
-            self._client_cache[cache_key] = client
-            return client
-            
         except Exception as e:
             logger.error(f"IIFL {api_type} login failed for user {user_id}: {traceback.format_exc()}")
             raise HTTPException(status_code=401, detail=f"IIFL {api_type} authentication failed: {str(e)}")
 
-    def place_order(self, db: Session, user_id: int, trade_request: TradeRequest) -> Dict:
+    async def place_order(self, db: Session, user_id: int, trade_request: TradeRequest) -> Dict:
         """Place order through IIFL Interactive API using IIFLConnect"""
         try:
             # Validate trade request
@@ -83,9 +81,10 @@ class IIFLService:
             
             # Get authenticated IIFLConnect client
             client = self._get_client(user_id, "interactive")
+            await self._ensure_client_logged_in(client, user_id, "interactive")
             
             # Get proper instrument details
-            instrument_details = self._get_instrument_details(client, trade_request)
+            instrument_details = await self._get_instrument_details(client, trade_request, user_id)
             
             # Determine order type and parameters
             order_params = self._prepare_order_parameters(trade_request, instrument_details)
@@ -93,7 +92,7 @@ class IIFLService:
             logger.info(f"Placing order for user {user_id} with params: {order_params}")
             
             # Use IIFLConnect's place_order method
-            order_result = client.place_order(**order_params)
+            order_result = await anyio.to_thread.run_sync(client.place_order, **order_params)
             
             logger.info(f"Order placed for user {user_id}: {order_result}")
             
@@ -122,7 +121,7 @@ class IIFLService:
                 detail=f"Failed to place order: {str(e)}"
             )
     
-    def place_order_with_details(self, db: Session, user_id: int, trade_request: TradeRequest, instrument_details: Dict) -> Dict:
+    async def place_order_with_details(self, db: Session, user_id: int, trade_request: TradeRequest, instrument_details: Dict) -> Dict:
         """Place order using provided instrument details (bypasses hardcoded lookup)"""
         try:
             # Validate trade request
@@ -130,6 +129,7 @@ class IIFLService:
             
             # Get authenticated IIFLConnect client
             client = self._get_client(user_id, "interactive")
+            await self._ensure_client_logged_in(client, user_id, "interactive")
             
             # Use the provided instrument details instead of looking them up
             logger.info(f"Placing order for user {user_id} with provided instrument details: {instrument_details}")
@@ -140,7 +140,7 @@ class IIFLService:
             logger.info(f"Placing order for user {user_id} with params: {order_params}")
             
             # Use IIFLConnect's place_order method
-            order_result = client.place_order(**order_params)
+            order_result = await anyio.to_thread.run_sync(client.place_order, **order_params)
             
             logger.info(f"Order placed for user {user_id}: {order_result}")
             
@@ -193,17 +193,17 @@ class IIFLService:
         fno_instruments = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX", "BANKEX"]
         return instrument.upper() in fno_instruments
 
-    def _get_instrument_details(self, client: IIFLConnect, trade_request: TradeRequest) -> Dict:
+    async def _get_instrument_details(self, client: IIFLConnect, trade_request: TradeRequest, user_id: int) -> Dict:
         """Get proper instrument details from IIFL using dynamic search"""
         try:
             exchange_segment = self._get_exchange_segment(trade_request.underlying_instrument)
             
             # For F&O instruments, try to get proper instrument ID
             if self._is_futures_options_instrument(trade_request.underlying_instrument):
-                instrument_id = self._get_fno_instrument_id(client, trade_request)
+                instrument_id = await self._get_fno_instrument_id(client, trade_request, user_id)
             else:
                 # For cash market instruments, use dynamic search instead of hardcoded mapping
-                instrument_id = self._get_cash_instrument_id_dynamic(client, trade_request.underlying_instrument)
+                instrument_id = await self._get_cash_instrument_id_dynamic(client, trade_request.underlying_instrument, user_id)
             
             return {
                 "exchangeSegment": exchange_segment,
@@ -218,14 +218,14 @@ class IIFLService:
                 detail=f"Failed to get instrument details: {str(e)}"
             )
 
-    def _get_fno_instrument_id(self, client: IIFLConnect, trade_request: TradeRequest) -> int:
+    async def _get_fno_instrument_id(self, client: IIFLConnect, trade_request: TradeRequest, user_id: int) -> int:
         """Get F&O instrument ID using IIFL's instrument search"""
         try:
             # Search for the instrument using IIFL's search API
             search_string = self._build_search_string(trade_request)
             logger.info(f"Searching for F&O instrument: {search_string}")
             
-            search_result = client.search_by_scriptname(searchString=search_string)
+            search_result = await anyio.to_thread.run_sync(client.search_by_scriptname, searchString=search_string)
             
             if search_result.get("type") == "success":
                 instruments = search_result.get("result", [])
@@ -299,16 +299,18 @@ class IIFLService:
         }
         
         instrument_id = fallback_map.get(trade_request.underlying_instrument.upper(), 26000)
-        logger.warning(f"Using fallback instrument ID {instrument_id} for {trade_request.underlying_instrument}")
+        logger.warning(
+            f"Using fallback instrument ID {instrument_id} for instrument {trade_request.underlying_instrument}"
+        )
         return instrument_id
 
-    def _get_cash_instrument_id_dynamic(self, client: IIFLConnect, instrument: str) -> int:
+    async def _get_cash_instrument_id_dynamic(self, client: IIFLConnect, instrument: str, user_id: int) -> int:
         """Get instrument ID for cash market instruments using dynamic search"""
         try:
             logger.info(f"Searching for cash market instrument: {instrument}")
             
             # Search for the instrument using IIFL's search API
-            search_result = client.search_by_scriptname(instrument)
+            search_result = await anyio.to_thread.run_sync(client.search_by_scriptname, instrument)
             
             if search_result.get("type") == "success":
                 instruments = search_result.get("result", [])
@@ -396,37 +398,41 @@ class IIFLService:
             "apiOrderSource": "WebAPI"
         }
 
-    def get_order_book(self, db: Session, user_id: int) -> Dict:
+    async def get_order_book(self, db: Session, user_id: int) -> Dict:
         """Get order book from IIFL Interactive API"""
         try:
             client = self._get_client(user_id, "interactive")
-            return client.get_order_book()
+            await self._ensure_client_logged_in(client, user_id, "interactive")
+            return await anyio.to_thread.run_sync(client.get_order_book)
         except Exception as e:
             logger.error(f"Order book fetch failed for user {user_id}: {e}")
             raise
 
-    def get_positions(self, db: Session, user_id: int) -> Dict:
+    async def get_positions(self, db: Session, user_id: int) -> Dict:
         """Get positions from IIFL Interactive API"""
         try:
             client = self._get_client(user_id, "interactive")
-            return client.get_position_netwise()
+            await self._ensure_client_logged_in(client, user_id, "interactive")
+            return await anyio.to_thread.run_sync(client.get_position_netwise)
         except Exception as e:
             logger.error(f"Positions fetch failed for user {user_id}: {e}")
             raise
 
-    def get_holdings(self, db: Session, user_id: int) -> Dict:
+    async def get_holdings(self, db: Session, user_id: int) -> Dict:
         """Get long-term holdings from IIFL Interactive API"""
         try:
             client = self._get_client(user_id, "interactive")
-            return client.get_holding()
+            await self._ensure_client_logged_in(client, user_id, "interactive")
+            return await anyio.to_thread.run_sync(client.get_holding)
         except Exception as e:
             logger.error(f"Holdings fetch failed for user {user_id}: {e}")
             raise
 
-    def get_market_data(self, db: Session, user_id: int, instruments: List[str]) -> Dict:
+    async def get_market_data(self, db: Session, user_id: int, instruments: List[str]) -> Dict:
         """Get market data using IIFL Market Data API"""
         try:
             client = self._get_client(user_id, "market")
+            await self._ensure_client_logged_in(client, user_id, "market")
             
             # Convert instrument symbols to IIFL format
             instrument_list = []
@@ -439,7 +445,8 @@ class IIFLService:
                 })
             
             # Get quotes using IIFLConnect
-            return client.get_quote(
+            return await anyio.to_thread.run_sync(
+                client.get_quote,
                 Instruments=instrument_list,
                 xtsMessageCode=1502,  # Full market data
                 publishFormat="JSON"
@@ -449,22 +456,41 @@ class IIFLService:
             logger.error(f"Market data fetch failed for user {user_id}: {e}")
             raise
 
-    def cancel_order(self, db: Session, user_id: int, order_id: str) -> Dict:
+    async def cancel_order(self, db: Session, user_id: int, order_id: str) -> Dict:
         """Cancel order using IIFL Interactive API"""
         try:
+            try:
+                app_order_id = int(order_id)
+            except (TypeError, ValueError):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Order cannot be cancelled because the broker order ID is unavailable."
+                )
+
             client = self._get_client(user_id, "interactive")
-            return client.cancel_order(
-                appOrderID=order_id,
+            await self._ensure_client_logged_in(client, user_id, "interactive")
+            return await anyio.to_thread.run_sync(
+                client.cancel_order,
+                appOrderID=app_order_id,
                 orderUniqueIdentifier=f"cancel_{order_id}_{int(datetime.now().timestamp())}"
             )
         except Exception as e:
             logger.error(f"Order cancellation failed for user {user_id}: {e}")
             raise
 
-    def modify_order(self, db: Session, user_id: int, order_id: str, modification: TradeRequest) -> Dict:
+    async def modify_order(self, db: Session, user_id: int, order_id: str, modification: TradeRequest) -> Dict:
         """Modify order using IIFL Interactive API"""
         try:
+            try:
+                app_order_id = int(order_id)
+            except (TypeError, ValueError):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Order cannot be modified because the broker order ID is unavailable."
+                )
+
             client = self._get_client(user_id, "interactive")
+            await self._ensure_client_logged_in(client, user_id, "interactive")
             
             # Determine modified order type
             if modification.price is not None:
@@ -474,8 +500,9 @@ class IIFLService:
                 order_type = "MARKET"
                 limit_price = 0
             
-            return client.modify_order(
-                appOrderID=int(order_id),
+            return await anyio.to_thread.run_sync(
+                client.modify_order,
+                appOrderID=app_order_id,
                 modifiedProductType="NRML",
                 modifiedOrderType=order_type,
                 modifiedOrderQuantity=modification.quantity,
@@ -489,31 +516,35 @@ class IIFLService:
             logger.error(f"Order modification failed for user {user_id}: {e}")
             raise
 
-    def get_user_profile(self, db: Session, user_id: int) -> Dict:
+    async def get_user_profile(self, db: Session, user_id: int) -> Dict:
         """Get user profile from IIFL"""
         try:
             client = self._get_client(user_id, "interactive")
-            return client.get_profile()
+            await self._ensure_client_logged_in(client, user_id, "interactive")
+            return await anyio.to_thread.run_sync(client.get_profile)
         except Exception as e:
             logger.error(f"Profile fetch failed for user {user_id}: {e}")
             raise
 
-    def get_balance(self, db: Session, user_id: int) -> Dict:
+    async def get_balance(self, db: Session, user_id: int) -> Dict:
         """Get account balance from IIFL"""
         try:
             client = self._get_client(user_id, "interactive")
-            return client.get_balance()
+            await self._ensure_client_logged_in(client, user_id, "interactive")
+            return await anyio.to_thread.run_sync(client.get_balance)
         except Exception as e:
             logger.error(f"Balance fetch failed for user {user_id}: {e}")
             raise
 
-    def get_ltp(self, db: Session, user_id: int, instruments: List[Dict]) -> Dict:
+    async def get_ltp(self, db: Session, user_id: int, instruments: List[Dict]) -> Dict:
         """Get Last Traded Price for instruments using IIFLConnect"""
         try:
             client = self._get_client(user_id, "market")
+            await self._ensure_client_logged_in(client, user_id, "market")
             
             # Use IIFLConnect's get_quote method
-            quote_result = client.get_quote(
+            quote_result = await anyio.to_thread.run_sync(
+                client.get_quote,
                 Instruments=instruments,
                 xtsMessageCode=1512,  # LTP message code
                 publishFormat="JSON"
@@ -536,13 +567,13 @@ class IIFLService:
             logger.error(f"LTP fetch failed for user {user_id}: {e}")
             raise
 
-    def logout_user(self, user_id: int, api_type: Literal["market", "interactive", "both"] = "both"):
+    async def logout_user(self, user_id: int, api_type: Literal["market", "interactive", "both"] = "both"):
         """Logout user from IIFL and clear cache"""
         if api_type in ["interactive", "both"]:
             cache_key = f"{user_id}_interactive"
             if cache_key in self._client_cache:
                 try:
-                    self._client_cache[cache_key].interactive_logout()
+                    await anyio.to_thread.run_sync(self._client_cache[cache_key].interactive_logout)
                 except:
                     pass  # Ignore logout errors
                 del self._client_cache[cache_key]
@@ -551,7 +582,7 @@ class IIFLService:
             cache_key = f"{user_id}_market"
             if cache_key in self._client_cache:
                 try:
-                    self._client_cache[cache_key].marketdata_logout()
+                    await anyio.to_thread.run_sync(self._client_cache[cache_key].marketdata_logout)
                 except:
                     pass  # Ignore logout errors
                 del self._client_cache[cache_key]
@@ -607,26 +638,28 @@ class IIFLService:
         
         return user
 
-    def get_instrument_master(self, db: Session, user_id: int, exchange_segments: List[str] = None) -> Dict:
+    async def get_instrument_master(self, db: Session, user_id: int, exchange_segments: List[str] = None) -> Dict:
         """Download instrument master data from IIFL"""
         try:
             client = self._get_client(user_id, "market")
+            await self._ensure_client_logged_in(client, user_id, "market")
             
             # Default to major exchange segments if none specified
             if not exchange_segments:
                 exchange_segments = ["NSECM", "NSEFO"]
             
-            return client.get_master(exchangeSegmentList=exchange_segments)
+            return await anyio.to_thread.run_sync(client.get_master, exchangeSegmentList=exchange_segments)
             
         except Exception as e:
             logger.error(f"Instrument master fetch failed for user {user_id}: {e}")
             raise
 
-    def search_instruments(self, db: Session, user_id: int, search_string: str) -> Dict:
+    async def search_instruments(self, db: Session, user_id: int, search_string: str) -> Dict:
         """Search instruments by name/symbol"""
         try:
             client = self._get_client(user_id, "market")
-            return client.search_by_scriptname(searchString=search_string)
+            await self._ensure_client_logged_in(client, user_id, "market")
+            return await anyio.to_thread.run_sync(client.search_by_scriptname, searchString=search_string)
             
         except Exception as e:
             logger.error(f"Instrument search failed for user {user_id}: {e}")
@@ -674,7 +707,7 @@ class IIFLService:
                     iifl_market_secret_key=encrypt_data(market_secret_key)
                 )
                 client = IIFLConnect(temp_user, api_type="market")
-                response = client.marketdata_login()
+                response = await anyio.to_thread.run_sync(client.marketdata_login)
                 logger.info(f"Market data login response: {response}")
                 
                 if response.get("type") == "success" and "result" in response and "token" in response["result"]:
@@ -693,7 +726,7 @@ class IIFLService:
                     iifl_interactive_secret_key=encrypt_data(interactive_secret_key)
                 )
                 client = IIFLConnect(temp_user, api_type="interactive")
-                response = client.interactive_login()
+                response = await anyio.to_thread.run_sync(client.interactive_login)
                 logger.info(f"Interactive login response: {response}")
                 
                 if response.get("type") == "success" and "result" in response and "token" in response["result"]:

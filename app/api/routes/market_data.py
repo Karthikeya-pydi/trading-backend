@@ -7,6 +7,7 @@ import pandas as pd
 import os
 from pathlib import Path
 import json
+import anyio
 
 from app.core.database import get_db
 from app.api.dependencies import get_current_user
@@ -87,6 +88,7 @@ async def get_market_data(
     try:
         iifl_service = IIFLService(db)
         client = iifl_service._get_client(current_user.id, "market")
+        await iifl_service._ensure_client_logged_in(client, current_user.id, "market")
         
         instruments = request.get("instruments", [])
         if not instruments:
@@ -116,7 +118,8 @@ async def get_market_data(
             })
         
         # Get quotes from IIFL
-        quotes_result = client.get_quote(
+        quotes_result = await anyio.to_thread.run_sync(
+            client.get_quote,
             Instruments=formatted_instruments,
             xtsMessageCode=1512,  # Full market data
             publishFormat="JSON"
@@ -196,7 +199,7 @@ async def get_stock_data_by_name(
         iifl_client = IIFLConnect(current_user, api_type="market")
         
         # Step 1: Login to get token
-        login_response = iifl_client.marketdata_login()
+        login_response = await anyio.to_thread.run_sync(iifl_client.marketdata_login)
         if login_response.get("type") != "success":
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -204,7 +207,9 @@ async def get_stock_data_by_name(
             )
         
         # Step 2: Search for the stock
-        search_response = iifl_client.search_by_scriptname(stock_name)
+        search_response = await anyio.to_thread.run_sync(
+            lambda: iifl_client.search_by_scriptname(stock_name)
+        )
         
         if search_response.get("type") != "success" or not search_response.get("result"):
             raise HTTPException(
@@ -237,17 +242,21 @@ async def get_stock_data_by_name(
         }]
         
         # Get Touchline data (basic market data)
-        touchline_response = iifl_client.get_quote(
-            Instruments=instruments,
-            xtsMessageCode=iifl_client.MESSAGE_CODE_TOUCHLINE,
-            publishFormat=iifl_client.PUBLISH_FORMAT_JSON
+        touchline_response = await anyio.to_thread.run_sync(
+            lambda: iifl_client.get_quote(
+                Instruments=instruments,
+                xtsMessageCode=iifl_client.MESSAGE_CODE_TOUCHLINE,
+                publishFormat=iifl_client.PUBLISH_FORMAT_JSON
+            )
         )
         
         # Get Market Depth data (order book)
-        market_depth_response = iifl_client.get_quote(
-            Instruments=instruments,
-            xtsMessageCode=iifl_client.MESSAGE_CODE_MARKET_DEPTH,
-            publishFormat=iifl_client.PUBLISH_FORMAT_JSON
+        market_depth_response = await anyio.to_thread.run_sync(
+            lambda: iifl_client.get_quote(
+                Instruments=instruments,
+                xtsMessageCode=iifl_client.MESSAGE_CODE_MARKET_DEPTH,
+                publishFormat=iifl_client.PUBLISH_FORMAT_JSON
+            )
         )
         
         # Step 4: Get OHLC data (last 5 days)
@@ -255,12 +264,14 @@ async def get_stock_data_by_name(
         end_time = datetime.now()
         start_time = end_time - timedelta(days=5)
         
-        ohlc_response = iifl_client.get_ohlc(
-            exchangeSegment="NSECM" if exchange_segment == 1 else "NSEFO",
-            exchangeInstrumentID=exchange_instrument_id,
-            startTime=start_time.strftime("%b %d %Y %H%M%S"),
-            endTime=end_time.strftime("%b %d %Y %H%M%S"),
-            compressionValue=iifl_client.COMPRESSION_DAILY
+        ohlc_response = await anyio.to_thread.run_sync(
+            lambda: iifl_client.get_ohlc(
+                exchangeSegment="NSECM" if exchange_segment == 1 else "NSEFO",
+                exchangeInstrumentID=exchange_instrument_id,
+                startTime=start_time.strftime("%b %d %Y %H%M%S"),
+                endTime=end_time.strftime("%b %d %Y %H%M%S"),
+                compressionValue=iifl_client.COMPRESSION_DAILY
+            )
         )
         
         # Step 5: Get current price from touchline data
@@ -309,9 +320,10 @@ async def get_stock_data_by_name(
         if current_price:
             try:
                 analytics_service = MarketAnalyticsService(current_user, db)
-                analytics_data = analytics_service.get_stock_analytics(
-                    symbol=stock_info.get("Name"),
-                    current_price=float(current_price)
+                analytics_data = await anyio.to_thread.run_sync(
+                    analytics_service.get_stock_analytics,
+                    stock_info.get("Name"),
+                    float(current_price)
                 )
             except Exception as e:
                 logger.error(f"Error calculating analytics for {stock_name}: {e}")
@@ -344,7 +356,7 @@ async def get_stock_data_by_name(
         }
         
         # Step 8: Logout
-        iifl_client.marketdata_logout()
+        await anyio.to_thread.run_sync(iifl_client.marketdata_logout)
         
         return response_data
         
@@ -394,7 +406,7 @@ async def get_stock_data_by_name_get(
         iifl_client = IIFLConnect(current_user, api_type="market")
         
         # Step 1: Login to get token
-        login_response = iifl_client.marketdata_login()
+        login_response = await anyio.to_thread.run_sync(iifl_client.marketdata_login)
         if login_response.get("type") != "success":
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -402,7 +414,9 @@ async def get_stock_data_by_name_get(
             )
         
         # Step 2: Search for the stock
-        search_response = iifl_client.search_by_scriptname(stock_name)
+        search_response = await anyio.to_thread.run_sync(
+            lambda: iifl_client.search_by_scriptname(stock_name)
+        )
         
         if search_response.get("type") != "success" or not search_response.get("result"):
             raise HTTPException(
@@ -435,17 +449,21 @@ async def get_stock_data_by_name_get(
         }]
         
         # Get Touchline data (basic market data)
-        touchline_response = iifl_client.get_quote(
-            Instruments=instruments,
-            xtsMessageCode=iifl_client.MESSAGE_CODE_TOUCHLINE,
-            publishFormat=iifl_client.PUBLISH_FORMAT_JSON
+        touchline_response = await anyio.to_thread.run_sync(
+            lambda: iifl_client.get_quote(
+                Instruments=instruments,
+                xtsMessageCode=iifl_client.MESSAGE_CODE_TOUCHLINE,
+                publishFormat=iifl_client.PUBLISH_FORMAT_JSON
+            )
         )
         
         # Get Market Depth data (order book)
-        market_depth_response = iifl_client.get_quote(
-            Instruments=instruments,
-            xtsMessageCode=iifl_client.MESSAGE_CODE_MARKET_DEPTH,
-            publishFormat=iifl_client.PUBLISH_FORMAT_JSON
+        market_depth_response = await anyio.to_thread.run_sync(
+            lambda: iifl_client.get_quote(
+                Instruments=instruments,
+                xtsMessageCode=iifl_client.MESSAGE_CODE_MARKET_DEPTH,
+                publishFormat=iifl_client.PUBLISH_FORMAT_JSON
+            )
         )
         
         # Step 4: Get OHLC data (last 5 days)
@@ -453,12 +471,14 @@ async def get_stock_data_by_name_get(
         end_time = datetime.now()
         start_time = end_time - timedelta(days=5)
         
-        ohlc_response = iifl_client.get_ohlc(
-            exchangeSegment="NSECM" if exchange_segment == 1 else "NSEFO",
-            exchangeInstrumentID=exchange_instrument_id,
-            startTime=start_time.strftime("%b %d %Y %H%M%S"),
-            endTime=end_time.strftime("%b %d %Y %H%M%S"),
-            compressionValue=iifl_client.COMPRESSION_DAILY
+        ohlc_response = await anyio.to_thread.run_sync(
+            lambda: iifl_client.get_ohlc(
+                exchangeSegment="NSECM" if exchange_segment == 1 else "NSEFO",
+                exchangeInstrumentID=exchange_instrument_id,
+                startTime=start_time.strftime("%b %d %Y %H%M%S"),
+                endTime=end_time.strftime("%b %d %Y %H%M%S"),
+                compressionValue=iifl_client.COMPRESSION_DAILY
+            )
         )
         
         # Step 5: Get current price from touchline data
@@ -507,9 +527,10 @@ async def get_stock_data_by_name_get(
         if current_price:
             try:
                 analytics_service = MarketAnalyticsService(current_user, db)
-                analytics_data = analytics_service.get_stock_analytics(
-                    symbol=stock_info.get("Name"),
-                    current_price=float(current_price)
+                analytics_data = await anyio.to_thread.run_sync(
+                    analytics_service.get_stock_analytics,
+                    stock_info.get("Name"),
+                    float(current_price)
                 )
             except Exception as e:
                 logger.error(f"Error calculating analytics for {stock_name}: {e}")
@@ -542,7 +563,7 @@ async def get_stock_data_by_name_get(
         }
         
         # Step 8: Logout
-        iifl_client.marketdata_logout()
+        await anyio.to_thread.run_sync(iifl_client.marketdata_logout)
         
         return response_data
         
@@ -589,7 +610,7 @@ async def get_last_traded_price(
             )
         
         iifl_service = IIFLService(db)
-        ltp_data = iifl_service.get_ltp(db, current_user.id, instruments)
+        ltp_data = await iifl_service.get_ltp(db, current_user.id, instruments)
         return ltp_data
         
     except HTTPException:
@@ -639,9 +660,10 @@ async def search_instruments(
     try:
         iifl_service = IIFLService(db)
         client = iifl_service._get_client(current_user.id, "market")
+        await iifl_service._ensure_client_logged_in(client, current_user.id, "market")
         
         # Try IIFL native search first
-        search_result = client.search_by_scriptname(q)
+        search_result = await anyio.to_thread.run_sync(client.search_by_scriptname, q)
         
         if (search_result.get("type") == "success" and 
             search_result.get("result") and 
@@ -710,9 +732,10 @@ async def search_instruments(
                     # Calculate analytics if price is available
                     analytics_data = None
                     if current_price:
-                        analytics_data = analytics_service.get_stock_analytics(
-                            symbol=instrument.get("Name"),
-                            current_price=float(current_price)
+                        analytics_data = await anyio.to_thread.run_sync(
+                            analytics_service.get_stock_analytics,
+                            instrument.get("Name"),
+                            float(current_price)
                         )
                     
                     # Add analytics to instrument data
@@ -736,7 +759,7 @@ async def search_instruments(
             }
         
         # Fallback to master data search
-        master_data = iifl_service.get_instrument_master(db, current_user.id, [exchange_segment])
+        master_data = await iifl_service.get_instrument_master(db, current_user.id, [exchange_segment])
         
         if master_data.get("type") != "success":
             raise HTTPException(
@@ -838,9 +861,10 @@ async def search_instruments(
                 # Calculate analytics if price is available
                 analytics_data = None
                 if current_price:
-                    analytics_data = analytics_service.get_stock_analytics(
-                        symbol=instrument.get("Name"),
-                        current_price=float(current_price)
+                    analytics_data = await anyio.to_thread.run_sync(
+                        analytics_service.get_stock_analytics,
+                        instrument.get("Name"),
+                        float(current_price)
                     )
                 
                 # Add analytics to instrument data
@@ -905,7 +929,7 @@ async def get_instrument_master(
     try:
         iifl_service = IIFLService(db)
         segments = [seg.strip() for seg in exchange_segments.split(",")]
-        master_data = iifl_service.get_instrument_master(db, current_user.id, segments)
+        master_data = await iifl_service.get_instrument_master(db, current_user.id, segments)
         
         if master_data.get("type") != "success":
             raise HTTPException(

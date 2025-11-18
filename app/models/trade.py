@@ -40,7 +40,7 @@ class Trade(Base):
     executed_at = Column(DateTime(timezone=True), nullable=True)
     
     # Additional data (renamed from metadata to avoid SQLAlchemy conflict)
-    additional_data = Column(JSON, default={})
+    additional_data = Column(JSON, default=dict)
     
     # Relationships
     user = relationship("User")
