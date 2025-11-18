@@ -114,7 +114,7 @@ async def get_account_balance(
     
     try:
         iifl_service = IIFLService(db)
-        balance_result = iifl_service.get_balance(db, current_user.id)
+        balance_result = await iifl_service.get_balance(db, current_user.id)
         
         return {
             "status": "success",

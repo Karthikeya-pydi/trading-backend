@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 import httpx
 # from loguru import logger  # ← DISABLED FOR VERCEL
 
-from app.core.database import get_db
+from app.core.database import get_db, SessionLocal
 from app.core.config import settings
 from app.core.jwt import AuthJWT, get_auth_jwt
 from app.core.errors import auth_http_error, AuthErrorCode
@@ -126,27 +126,27 @@ async def google_callback(
                 db.rollback()
                 # Try to reconnect and retry once
                 try:
-                    db.close()
-                    db = next(get_db())
-                    user = db.query(User).filter(User.email == email).first()
-                    if not user:
-                        user = User(
-                            email=email,
-                            name=name,
-                            google_id=google_id,
-                            profile_picture=picture,
-                            is_verified=True,
-                        )
-                        db.add(user)
-                    else:
-                        user.name = name or user.name
-                        user.google_id = google_id or user.google_id
-                        user.profile_picture = picture or user.profile_picture
-                        user.is_verified = True
-                    
-                    user.last_login_at = datetime.now(timezone.utc)
-                    db.commit()
-                    db.refresh(user)
+                    with SessionLocal() as retry_db:
+                        retry_user = retry_db.query(User).filter(User.email == email).first()
+                        if not retry_user:
+                            retry_user = User(
+                                email=email,
+                                name=name,
+                                google_id=google_id,
+                                profile_picture=picture,
+                                is_verified=True,
+                            )
+                            retry_db.add(retry_user)
+                        else:
+                            retry_user.name = name or retry_user.name
+                            retry_user.google_id = google_id or retry_user.google_id
+                            retry_user.profile_picture = picture or retry_user.profile_picture
+                            retry_user.is_verified = True
+                        
+                        retry_user.last_login_at = datetime.now(timezone.utc)
+                        retry_db.commit()
+                        retry_db.refresh(retry_user)
+                        user = retry_user
                 except Exception as retry_error:
                     print(f"Database retry failed: {retry_error}")
                     raise Exception(f"Database connection failed: {retry_error}")
@@ -173,8 +173,7 @@ async def refresh_token(
     """Refresh access token using refresh token"""
     try:
         # Verify refresh token properly
-        refresh_payload = authorize.verify_token(refresh_token)
-        email = refresh_payload
+        email = authorize.verify_refresh_token(refresh_token)
         
         user = db.query(User).filter(User.email == email).first()
         

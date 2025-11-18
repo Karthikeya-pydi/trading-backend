@@ -43,6 +43,31 @@ class AuthJWT:
                 detail="Could not validate credentials"
             )
     
+    def verify_refresh_token(self, token: str) -> str:
+        """
+        Verify that the provided token is a refresh token and return the subject (email).
+        """
+        try:
+            payload = jwt.decode(token, self.secret_key, algorithms=[self.algorithm])
+            if payload.get("type") != "refresh":
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid refresh token"
+                )
+            
+            email: str = payload.get("sub")
+            if email is None:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Could not validate credentials"
+                )
+            return email
+        except JWTError:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Refresh token is invalid or expired"
+            )
+    
     def verify_token_with_refresh(self, token: str, refresh_token: Optional[str] = None, db: Optional[object] = None) -> Tuple[str, Optional[str], Optional[bool]]:
         """
         Verify access token, and if expired, try to refresh using refresh token.
