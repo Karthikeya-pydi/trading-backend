@@ -19,7 +19,7 @@ class S3Service:
         self.region = settings.aws_region
         self.nifty_folder = "nifty_indices"
         self.bhavcopy_folder = "bhavcopies"
-        self.adjusted_eq_folder = "adjusted-eq-data"
+        self.adjusted_eq_folder = "returns"
         
         # Initialize S3 client
         try:

@@ -161,6 +161,20 @@ def _s3_key_exists(s3_key: str, bucket: str = S3_BUCKET) -> bool:
         raise
 
 
+def _extract_date_from_filename(s3_key: str) -> Optional[str]:
+    """Extract date string (YYYY-MM-DD) from filename like 'returns-YYYY-MM-DD.csv'."""
+    try:
+        filename = s3_key.split("/")[-1]
+        if "returns-" in filename and filename.endswith(".csv"):
+            date_str = filename.replace("returns-", "").replace(".csv", "")
+            # Validate date format
+            datetime.strptime(date_str, "%Y-%m-%d")
+            return date_str
+    except (ValueError, IndexError, AttributeError):
+        pass
+    return None
+
+
 def _find_latest_returns_file(bucket: str = S3_BUCKET, prefix: str = S3_INPUT_FOLDER) -> Optional[str]:
     """Find the latest returns file in S3 bucket matching returns-*.csv pattern."""
     try:
@@ -743,6 +757,18 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     except Exception as exc:  # noqa: BLE001
         return 1
 
+    # Determine output filename: use date from input file if output not explicitly provided
+    output_s3_key = args.output
+    if output_s3_key == DEFAULT_OUTPUT_S3_KEY:
+        # Extract date from input filename
+        date_str = _extract_date_from_filename(input_s3_key)
+        if date_str:
+            output_s3_key = f"{S3_OUTPUT_FOLDER}/returns-{date_str}.csv"
+        else:
+            # Fallback to today's date if can't extract from filename
+            date_str = datetime.now().strftime("%Y-%m-%d")
+            output_s3_key = f"{S3_OUTPUT_FOLDER}/returns-{date_str}.csv"
+
     screener_client = ScreenerClient(
         delay_seconds=args.delay,
         cache_s3_key=args.roe_cache,
@@ -764,7 +790,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         return 1
 
     try:
-        _write_csv_to_s3(enriched, args.output, bucket)
+        _write_csv_to_s3(enriched, output_s3_key, bucket)
     except NoCredentialsError:
         return 1
     except Exception as exc:  # noqa: BLE001

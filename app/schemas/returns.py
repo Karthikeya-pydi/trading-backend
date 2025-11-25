@@ -44,6 +44,13 @@ class StockReturnsData(BaseModel):
     sign_pattern_6_months: Optional[str] = None
     sign_pattern_9_months: Optional[str] = None
     sign_pattern_1_year: Optional[str] = None
+    
+    # Additional Company Information
+    sector: Optional[str] = None
+    industry: Optional[str] = None
+    market_cap_crore: Optional[float] = None
+    roe_percent: Optional[float] = None
+    roce_percent: Optional[float] = None
 
 class StockReturnsResponse(BaseModel):
     """Schema for stock returns data response"""

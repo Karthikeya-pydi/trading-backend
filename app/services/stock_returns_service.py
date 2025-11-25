@@ -56,7 +56,14 @@ class StockReturnsService:
             "sign_pattern_3_months": str(row['symbol_3months']) if pd.notna(row.get('symbol_3months')) else None,
             "sign_pattern_6_months": str(row['symbol_6months']) if pd.notna(row.get('symbol_6months')) else None,
             "sign_pattern_9_months": str(row['symbol_9months']) if pd.notna(row.get('symbol_9months')) else None,
-            "sign_pattern_1_year": str(row['symbol_1year']) if pd.notna(row.get('symbol_1year')) else None
+            "sign_pattern_1_year": str(row['symbol_1year']) if pd.notna(row.get('symbol_1year')) else None,
+            
+            # Additional Company Information
+            "sector": str(row['sector']) if pd.notna(row.get('sector')) else None,
+            "industry": str(row['industry']) if pd.notna(row.get('industry')) else None,
+            "market_cap_crore": float(row['marketCapCrore']) if pd.notna(row.get('marketCapCrore')) else None,
+            "roe_percent": float(row['ROE_percent']) if pd.notna(row.get('ROE_percent')) else None,
+            "roce_percent": float(row['ROCE_percent']) if pd.notna(row.get('ROCE_percent')) else None
         }
     
     def _load_returns_data(self):
